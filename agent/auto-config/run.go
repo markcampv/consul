@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package autoconf
@@ -129,7 +129,7 @@ func (ac *AutoConfig) run(ctx context.Context, exit chan struct{}) {
 			return -1
 		}
 		expiry := cert.NotAfter.Add(ac.acConfig.FallbackLeeway)
-		return expiry.Sub(time.Now())
+		return time.Until(expiry)
 	}
 	fallbackTimer := time.NewTimer(calcFallbackInterval())
 

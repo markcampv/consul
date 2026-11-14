@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package generate
@@ -10,7 +10,7 @@ import (
 
 func Generate(gen *protogen.Plugin) error {
 	for _, file := range gen.Files {
-		if file.Generate != true {
+		if !file.Generate {
 			continue
 		}
 		if len(file.Messages) == 0 {

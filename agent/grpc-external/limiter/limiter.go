@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 // package limiter provides primatives for limiting the number of concurrent
@@ -73,10 +73,7 @@ func (l *SessionLimiter) Run(ctx context.Context) {
 	for {
 		select {
 		case <-l.wakeCh:
-			for {
-				if !l.overCapacity() {
-					break
-				}
+			for l.overCapacity() {
 
 				if err := l.drainLimiter.Wait(ctx); err != nil {
 					break

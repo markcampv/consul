@@ -1,0 +1,71 @@
+{{!
+  Copyright (c) HashiCorp, Inc.
+  SPDX-License-Identifier: BUSL-1.1
+}}
+
+<div
+  class={{class-map
+    'consul-peer-form-initiate-fieldsets'
+  }}
+  ...attributes
+>
+  {{#let
+    (hash
+      help='Enter a name to locally identify the new peer.'
+      Name=(array
+        (hash
+          test=(t 'common.validations.dns-hostname.test')
+          error=(t 'common.validations.dns-hostname.error' name="Name")
+        )
+      )
+    )
+
+    (hash
+      help='Enter the token received from the operator of the desired peer.'
+      PeeringToken=(array)
+    )
+
+  as |Name PeeringToken|}}
+      <StateMachine
+        @src={{require '/machines/validate.xstate' from="/components/consul/peer/form/generate/fieldsets"}}
+      as |fsm|>
+
+      <fieldset>
+        <Hds::Form::TextInput::Field
+          name="Name"
+          @value={{@item.Name}}
+          @isRequired={{true}}
+          @isInvalid={{if (get fsm.state.context.errors "Name") true false}}
+          {{validate @item validations=Name chart=fsm}}
+          {{on "input" (pick "target.value" (set @item "Name"))}}
+          data-test-peer-name
+          as |F|
+        >
+          <F.Label>Name of peer</F.Label>
+          <F.HelperText>{{Name.help}}</F.HelperText>
+          {{#if (get fsm.state.context.errors "Name")}}
+            <F.Error>{{get (get fsm.state.context.errors "Name") "message"}}</F.Error>
+          {{/if}}
+        </Hds::Form::TextInput::Field>
+
+        <Hds::Form::TextInput::Field
+          name="PeeringToken"
+          @value={{@item.PeeringToken}}
+          @isRequired={{true}}
+          {{validate @item validations=PeeringToken chart=fsm}}
+          {{on "input" (pick "target.value" (set @item "PeeringToken"))}}
+          data-test-peer-token
+          as |F|
+        >
+          <F.Label>Token</F.Label>
+          <F.HelperText>{{PeeringToken.help}}</F.HelperText>
+        </Hds::Form::TextInput::Field>
+
+        {{yield (hash
+          valid=(not (state-matches fsm.state 'error'))
+        )}}
+      </fieldset>
+
+    </StateMachine>
+  {{/let}}
+</div>

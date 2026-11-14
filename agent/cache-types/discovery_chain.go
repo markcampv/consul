@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package cachetype
@@ -21,7 +21,7 @@ type CompiledDiscoveryChain struct {
 	RPC RPC
 }
 
-func (c *CompiledDiscoveryChain) Fetch(opts cache.FetchOptions, req cache.Request) (cache.FetchResult, error) {
+func (c *CompiledDiscoveryChain) Fetch(ctx context.Context, opts cache.FetchOptions, req cache.Request) (cache.FetchResult, error) {
 	var result cache.FetchResult
 
 	// The request should be a DiscoveryChainRequest.
@@ -36,8 +36,8 @@ func (c *CompiledDiscoveryChain) Fetch(opts cache.FetchOptions, req cache.Reques
 	reqReal = &dup
 
 	// Set the minimum query index to our current index so we block
-	reqReal.QueryOptions.MinQueryIndex = opts.MinIndex
-	reqReal.QueryOptions.MaxQueryTime = opts.Timeout
+	reqReal.MinQueryIndex = opts.MinIndex
+	reqReal.MaxQueryTime = opts.Timeout
 
 	// Always allow stale - there's no point in hitting leader if the request is
 	// going to be served from cache and endup arbitrarily stale anyway. This
@@ -47,11 +47,11 @@ func (c *CompiledDiscoveryChain) Fetch(opts cache.FetchOptions, req cache.Reques
 
 	// Fetch
 	var reply structs.DiscoveryChainResponse
-	if err := c.RPC.RPC(context.Background(), "DiscoveryChain.Get", reqReal, &reply); err != nil {
+	if err := c.RPC.RPC(ctx, "DiscoveryChain.Get", reqReal, &reply); err != nil {
 		return result, err
 	}
 
 	result.Value = &reply
-	result.Index = reply.QueryMeta.Index
+	result.Index = reply.Index
 	return result, nil
 }

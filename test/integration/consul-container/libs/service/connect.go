@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package service
@@ -13,10 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hashicorp/consul/api"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
+	"github.com/hashicorp/consul/api"
 	"github.com/hashicorp/consul/test/integration/consul-container/libs/cluster"
 	"github.com/hashicorp/consul/test/integration/consul-container/libs/utils"
 )
@@ -40,12 +40,12 @@ func (g ConnectContainer) Exec(ctx context.Context, cmd []string) (string, error
 	if err != nil {
 		return "", fmt.Errorf("exec with error %s", err)
 	}
-	if exitCode != 0 {
-		return "", fmt.Errorf("exec with exit code %d", exitCode)
-	}
 	buf, err := io.ReadAll(reader)
 	if err != nil {
 		return "", fmt.Errorf("error reading from exec output: %w", err)
+	}
+	if exitCode != 0 {
+		return "", fmt.Errorf("exec with exit code %d: %s", exitCode, buf)
 	}
 	return string(buf), nil
 }
@@ -89,10 +89,11 @@ func (g ConnectContainer) Restart() error {
 	}
 
 	if utils.FollowLog {
+		// Consumers must be registered before the producer starts; it snapshots them.
+		g.container.FollowOutput(&LogConsumer{})
 		if err := g.container.StartLogProducer(g.ctx); err != nil {
 			return fmt.Errorf("starting log producer: %w", err)
 		}
-		g.container.FollowOutput(&LogConsumer{})
 		deferClean.Add(func() {
 			_ = g.container.StopLogProducer()
 		})
@@ -156,7 +157,7 @@ func (g ConnectContainer) GetAdminAddr() (string, int) {
 
 func (g ConnectContainer) GetStatus() (string, error) {
 	state, err := g.container.State(g.ctx)
-	return state.Status, err
+	return string(state.Status), err
 }
 
 type SidecarConfig struct {

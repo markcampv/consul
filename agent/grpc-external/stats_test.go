@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package external
@@ -9,8 +9,8 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/armon/go-metrics"
 	"github.com/google/go-cmp/cmp"
+	"github.com/hashicorp/go-metrics"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
@@ -101,12 +101,4 @@ func TestServer_EmitsStats(t *testing.T) {
 		{Key: []string{"testing", "grpc", "server", "stream", "count"}, Val: 1, Labels: expLabels},
 	}
 	prototest.AssertDeepEqual(t, expectedCounter, sink.IncrCounterCalls, cmpMetricCalls)
-}
-
-func logError(t *testing.T, f func() error) func() {
-	return func() {
-		if err := f(); err != nil {
-			t.Logf(err.Error())
-		}
-	}
 }

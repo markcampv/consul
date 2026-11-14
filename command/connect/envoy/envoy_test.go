@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package envoy
@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/hashicorp/consul/agent/netutil"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -72,6 +73,9 @@ func TestEnvoyGateway_Validation(t *testing.T) {
 			ui := cli.NewMockUi()
 			c := New(ui)
 			c.init()
+			c.checkDualStack = func(dto *netutil.IPStackRequestDTO) (bool, error) {
+				return false, nil
+			}
 
 			code := c.Run(tc.args)
 			if code == 0 {
@@ -127,6 +131,7 @@ type generateConfigTestCase struct {
 	XDSPorts          agent.GRPCPorts // used to mock an agent's configured gRPC ports. Plaintext defaults to 8502 and TLS defaults to 8503.
 	AgentSelf110      bool            // fake the agent API from versions v1.10 and earlier
 	GRPCDisabled      bool
+	IsDualStack       bool
 	WantArgs          BootstrapTplArgs
 	WantErr           string
 	WantWarn          string
@@ -142,7 +147,7 @@ func TestGenerateConfig(t *testing.T) {
 	require.NoError(t, err)
 
 	rootPEM := string(b)
-	rootPEM = strings.Replace(rootPEM, "\n", "\\n", -1)
+	rootPEM = strings.ReplaceAll(rootPEM, "\n", "\\n")
 
 	b, err = os.ReadFile("../../../test/ca_path/cert1.crt")
 	require.NoError(t, err)
@@ -151,7 +156,7 @@ func TestGenerateConfig(t *testing.T) {
 	b, err = os.ReadFile("../../../test/ca_path/cert2.crt")
 	require.NoError(t, err)
 	pathPEM += string(b)
-	pathPEM = strings.Replace(pathPEM, "\n", "\\n", -1)
+	pathPEM = strings.ReplaceAll(pathPEM, "\n", "\\n")
 
 	cases := []generateConfigTestCase{
 		{
@@ -193,6 +198,55 @@ func TestGenerateConfig(t *testing.T) {
 			},
 		},
 		{
+			Name:        "defaults-with-dual-stack",
+			Flags:       []string{"-proxy-id", "test-proxy"},
+			IsDualStack: true,
+			WantArgs: BootstrapTplArgs{
+				ProxyCluster: "test-proxy",
+				ProxyID:      "test-proxy",
+				// We don't know this til after the lookup so it will be empty in the
+				// initial args call we are testing here.
+				ProxySourceService: "",
+				// Should resolve IP, note this might not resolve the same way
+				// everywhere which might make this test brittle but not sure what else
+				// to do.
+				GRPC: GRPC{
+					AgentAddress: ipv6loopback,
+					AgentPort:    "8502",
+				},
+				AdminAccessLogPath:    "/dev/null",
+				AdminBindAddress:      ipv6loopback,
+				AdminBindPort:         "19000",
+				LocalAgentClusterName: xds.LocalAgentClusterName,
+				PrometheusScrapePath:  "/metrics",
+			},
+		},
+		{
+			Name: "admin-bind-flag-with-dual-stack",
+			Flags: []string{"-proxy-id", "test-proxy",
+				"-admin-bind", "localhost:9999"},
+			IsDualStack: true,
+			WantArgs: BootstrapTplArgs{
+				ProxyCluster: "test-proxy",
+				ProxyID:      "test-proxy",
+				// We don't know this til after the lookup so it will be empty in the
+				// initial args call we are testing here.
+				ProxySourceService: "",
+				// Should resolve IP, note this might not resolve the same way
+				// everywhere which might make this test brittle but not sure what else
+				// to do.
+				GRPC: GRPC{
+					AgentAddress: ipv6loopback,
+					AgentPort:    "8502",
+				},
+				AdminAccessLogPath:    "/dev/null",
+				AdminBindAddress:      ipv4loopback,
+				AdminBindPort:         "9999",
+				LocalAgentClusterName: xds.LocalAgentClusterName,
+				PrometheusScrapePath:  "/metrics",
+			},
+		},
+		{
 			Name:  "defaults-nodemeta",
 			Flags: []string{"-proxy-id", "test-proxy", "-node-name", "test-node"},
 			WantArgs: BootstrapTplArgs{
@@ -208,6 +262,29 @@ func TestGenerateConfig(t *testing.T) {
 				},
 				AdminAccessLogPath:    "/dev/null",
 				AdminBindAddress:      "127.0.0.1",
+				AdminBindPort:         "19000",
+				LocalAgentClusterName: xds.LocalAgentClusterName,
+				PrometheusBackendPort: "",
+				PrometheusScrapePath:  "/metrics",
+			},
+		},
+		{
+			Name:        "defaults-nodemeta-dualstack",
+			Flags:       []string{"-proxy-id", "test-proxy", "-node-name", "test-node"},
+			IsDualStack: true,
+			WantArgs: BootstrapTplArgs{
+				ProxyCluster: "test-proxy",
+				ProxyID:      "test-proxy",
+				NodeName:     "test-node",
+				// We don't know this til after the lookup so it will be empty in the
+				// initial args call we are testing here.
+				ProxySourceService: "",
+				GRPC: GRPC{
+					AgentAddress: ipv6loopback,
+					AgentPort:    "8502", // Note this is the gRPC port
+				},
+				AdminAccessLogPath:    "/dev/null",
+				AdminBindAddress:      ipv6loopback,
 				AdminBindPort:         "19000",
 				LocalAgentClusterName: xds.LocalAgentClusterName,
 				PrometheusBackendPort: "",
@@ -232,6 +309,30 @@ func TestGenerateConfig(t *testing.T) {
 				},
 				AdminAccessLogPath:    "/dev/null",
 				AdminBindAddress:      "127.0.0.1",
+				AdminBindPort:         "19000",
+				LocalAgentClusterName: xds.LocalAgentClusterName,
+				PrometheusScrapePath:  "/metrics",
+			},
+		},
+		{
+			Name:        "telemetry-collector-dualstack",
+			Flags:       []string{"-proxy-id", "test-proxy"},
+			IsDualStack: true,
+			ProxyConfig: map[string]interface{}{
+				"envoy_telemetry_collector_bind_socket_dir": "/tmp/consul/telemetry-collector",
+			},
+			WantArgs: BootstrapTplArgs{
+				ProxyCluster: "test-proxy",
+				ProxyID:      "test-proxy",
+				// We don't know this til after the lookup so it will be empty in the
+				// initial args call we are testing here.
+				ProxySourceService: "",
+				GRPC: GRPC{
+					AgentAddress: ipv6loopback,
+					AgentPort:    "8502",
+				},
+				AdminAccessLogPath:    "/dev/null",
+				AdminBindAddress:      ipv6loopback,
 				AdminBindPort:         "19000",
 				LocalAgentClusterName: xds.LocalAgentClusterName,
 				PrometheusScrapePath:  "/metrics",
@@ -266,6 +367,35 @@ func TestGenerateConfig(t *testing.T) {
 			},
 		},
 		{
+			Name: "prometheus-metrics-dualstack",
+			Flags: []string{"-proxy-id", "test-proxy",
+				"-prometheus-backend-port", "20100", "-prometheus-scrape-path", "/scrape-path"},
+			IsDualStack: true,
+			ProxyConfig: map[string]interface{}{
+				// When envoy_prometheus_bind_addr is set, if
+				// PrometheusBackendPort is set, there will be a
+				// "prometheus_backend" cluster in the Envoy configuration.
+				"envoy_prometheus_bind_addr": "0.0.0.0:9000",
+			},
+			WantArgs: BootstrapTplArgs{
+				ProxyCluster: "test-proxy",
+				ProxyID:      "test-proxy",
+				// We don't know this til after the lookup so it will be empty in the
+				// initial args call we are testing here.
+				ProxySourceService: "",
+				GRPC: GRPC{
+					AgentAddress: ipv6loopback,
+					AgentPort:    "8502", // Note this is the gRPC port
+				},
+				AdminAccessLogPath:    "/dev/null",
+				AdminBindAddress:      ipv6loopback,
+				AdminBindPort:         "19000",
+				LocalAgentClusterName: xds.LocalAgentClusterName,
+				PrometheusBackendPort: "20100",
+				PrometheusScrapePath:  "/scrape-path",
+			},
+		},
+		{
 			Name: "prometheus-metrics-tls-ca-file",
 			Flags: []string{"-proxy-id", "test-proxy",
 				"-prometheus-backend-port", "20100", "-prometheus-scrape-path", "/scrape-path",
@@ -289,6 +419,40 @@ func TestGenerateConfig(t *testing.T) {
 				},
 				AdminAccessLogPath:    "/dev/null",
 				AdminBindAddress:      "127.0.0.1",
+				AdminBindPort:         "19000",
+				LocalAgentClusterName: xds.LocalAgentClusterName,
+				PrometheusBackendPort: "20100",
+				PrometheusScrapePath:  "/scrape-path",
+				PrometheusCAFile:      "../../../test/key/ourdomain.cer",
+				PrometheusCertFile:    "../../../test/key/ourdomain_server.cer",
+				PrometheusKeyFile:     "../../../test/key/ourdomain_server.key",
+			},
+		},
+		{
+			Name: "prometheus-metrics-tls-ca-file-dualstack",
+			Flags: []string{"-proxy-id", "test-proxy",
+				"-prometheus-backend-port", "20100", "-prometheus-scrape-path", "/scrape-path",
+				"-prometheus-ca-file", "../../../test/key/ourdomain.cer", "-prometheus-cert-file", "../../../test/key/ourdomain_server.cer",
+				"-prometheus-key-file", "../../../test/key/ourdomain_server.key"},
+			IsDualStack: true,
+			ProxyConfig: map[string]interface{}{
+				// When envoy_prometheus_bind_addr is set, if
+				// PrometheusBackendPort is set, there will be a
+				// "prometheus_backend" cluster in the Envoy configuration.
+				"envoy_prometheus_bind_addr": "0.0.0.0:9000",
+			},
+			WantArgs: BootstrapTplArgs{
+				ProxyCluster: "test-proxy",
+				ProxyID:      "test-proxy",
+				// We don't know this til after the lookup so it will be empty in the
+				// initial args call we are testing here.
+				ProxySourceService: "",
+				GRPC: GRPC{
+					AgentAddress: ipv6loopback,
+					AgentPort:    "8502", // Note this is the gRPC port
+				},
+				AdminAccessLogPath:    "/dev/null",
+				AdminBindAddress:      ipv6loopback,
 				AdminBindPort:         "19000",
 				LocalAgentClusterName: xds.LocalAgentClusterName,
 				PrometheusBackendPort: "20100",
@@ -332,6 +496,40 @@ func TestGenerateConfig(t *testing.T) {
 			},
 		},
 		{
+			Name: "prometheus-metrics-tls-ca-path-dualstack",
+			Flags: []string{"-proxy-id", "test-proxy",
+				"-prometheus-backend-port", "20100", "-prometheus-scrape-path", "/scrape-path",
+				"-prometheus-ca-path", "../../../test/ca_path", "-prometheus-cert-file", "../../../test/key/ourdomain_server.cer",
+				"-prometheus-key-file", "../../../test/key/ourdomain_server.key"},
+			IsDualStack: true,
+			ProxyConfig: map[string]interface{}{
+				// When envoy_prometheus_bind_addr is set, if
+				// PrometheusBackendPort is set, there will be a
+				// "prometheus_backend" cluster in the Envoy configuration.
+				"envoy_prometheus_bind_addr": "0.0.0.0:9000",
+			},
+			WantArgs: BootstrapTplArgs{
+				ProxyCluster: "test-proxy",
+				ProxyID:      "test-proxy",
+				// We don't know this til after the lookup so it will be empty in the
+				// initial args call we are testing here.
+				ProxySourceService: "",
+				GRPC: GRPC{
+					AgentAddress: ipv6loopback,
+					AgentPort:    "8502", // Note this is the gRPC port
+				},
+				AdminAccessLogPath:    "/dev/null",
+				AdminBindAddress:      ipv6loopback,
+				AdminBindPort:         "19000",
+				LocalAgentClusterName: xds.LocalAgentClusterName,
+				PrometheusBackendPort: "20100",
+				PrometheusScrapePath:  "/scrape-path",
+				PrometheusCAPath:      "../../../test/ca_path",
+				PrometheusCertFile:    "../../../test/key/ourdomain_server.cer",
+				PrometheusKeyFile:     "../../../test/key/ourdomain_server.key",
+			},
+		},
+		{
 			Name: "token-arg",
 			Flags: []string{"-proxy-id", "test-proxy",
 				"-token", "c9a52720-bf6c-4aa6-b8bc-66881a5ade95"},
@@ -347,6 +545,29 @@ func TestGenerateConfig(t *testing.T) {
 				},
 				AdminAccessLogPath:    "/dev/null",
 				AdminBindAddress:      "127.0.0.1",
+				AdminBindPort:         "19000",
+				LocalAgentClusterName: xds.LocalAgentClusterName,
+				Token:                 "c9a52720-bf6c-4aa6-b8bc-66881a5ade95",
+				PrometheusScrapePath:  "/metrics",
+			},
+		},
+		{
+			Name: "token-arg-dualstack",
+			Flags: []string{"-proxy-id", "test-proxy",
+				"-token", "c9a52720-bf6c-4aa6-b8bc-66881a5ade95"},
+			IsDualStack: true,
+			WantArgs: BootstrapTplArgs{
+				ProxyCluster: "test-proxy",
+				ProxyID:      "test-proxy",
+				// We don't know this til after the lookup so it will be empty in the
+				// initial args call we are testing here.
+				ProxySourceService: "",
+				GRPC: GRPC{
+					AgentAddress: ipv6loopback,
+					AgentPort:    "8502", // Note this is the gRPC port
+				},
+				AdminAccessLogPath:    "/dev/null",
+				AdminBindAddress:      ipv6loopback,
 				AdminBindPort:         "19000",
 				LocalAgentClusterName: xds.LocalAgentClusterName,
 				Token:                 "c9a52720-bf6c-4aa6-b8bc-66881a5ade95",
@@ -378,6 +599,31 @@ func TestGenerateConfig(t *testing.T) {
 			},
 		},
 		{
+			Name:        "token-env-dualstack",
+			Flags:       []string{"-proxy-id", "test-proxy"},
+			IsDualStack: true,
+			Env: []string{
+				"CONSUL_HTTP_TOKEN=c9a52720-bf6c-4aa6-b8bc-66881a5ade95",
+			},
+			WantArgs: BootstrapTplArgs{
+				ProxyCluster: "test-proxy",
+				ProxyID:      "test-proxy",
+				// We don't know this til after the lookup so it will be empty in the
+				// initial args call we are testing here.
+				ProxySourceService: "",
+				GRPC: GRPC{
+					AgentAddress: ipv6loopback,
+					AgentPort:    "8502", // Note this is the gRPC port
+				},
+				AdminAccessLogPath:    "/dev/null",
+				AdminBindAddress:      ipv6loopback,
+				AdminBindPort:         "19000",
+				LocalAgentClusterName: xds.LocalAgentClusterName,
+				Token:                 "c9a52720-bf6c-4aa6-b8bc-66881a5ade95",
+				PrometheusScrapePath:  "/metrics",
+			},
+		},
+		{
 			Name: "token-file-arg",
 			Flags: []string{"-proxy-id", "test-proxy",
 				"-token-file", "@@TEMPDIR@@token.txt",
@@ -397,6 +643,33 @@ func TestGenerateConfig(t *testing.T) {
 				},
 				AdminAccessLogPath:    "/dev/null",
 				AdminBindAddress:      "127.0.0.1",
+				AdminBindPort:         "19000",
+				LocalAgentClusterName: xds.LocalAgentClusterName,
+				Token:                 "c9a52720-bf6c-4aa6-b8bc-66881a5ade95",
+				PrometheusScrapePath:  "/metrics",
+			},
+		},
+		{
+			Name: "token-file-arg-dualstack",
+			Flags: []string{"-proxy-id", "test-proxy",
+				"-token-file", "@@TEMPDIR@@token.txt",
+			},
+			IsDualStack: true,
+			Files: map[string]string{
+				"token.txt": "c9a52720-bf6c-4aa6-b8bc-66881a5ade95",
+			},
+			WantArgs: BootstrapTplArgs{
+				ProxyCluster: "test-proxy",
+				ProxyID:      "test-proxy",
+				// We don't know this til after the lookup so it will be empty in the
+				// initial args call we are testing here.
+				ProxySourceService: "",
+				GRPC: GRPC{
+					AgentAddress: ipv6loopback,
+					AgentPort:    "8502", // Note this is the gRPC port
+				},
+				AdminAccessLogPath:    "/dev/null",
+				AdminBindAddress:      ipv6loopback,
 				AdminBindPort:         "19000",
 				LocalAgentClusterName: xds.LocalAgentClusterName,
 				Token:                 "c9a52720-bf6c-4aa6-b8bc-66881a5ade95",
@@ -431,6 +704,34 @@ func TestGenerateConfig(t *testing.T) {
 			},
 		},
 		{
+			Name:        "token-file-env-dualstack",
+			Flags:       []string{"-proxy-id", "test-proxy"},
+			IsDualStack: true,
+			Env: []string{
+				"CONSUL_HTTP_TOKEN_FILE=@@TEMPDIR@@token.txt",
+			},
+			Files: map[string]string{
+				"token.txt": "c9a52720-bf6c-4aa6-b8bc-66881a5ade95",
+			},
+			WantArgs: BootstrapTplArgs{
+				ProxyCluster: "test-proxy",
+				ProxyID:      "test-proxy",
+				// We don't know this til after the lookup so it will be empty in the
+				// initial args call we are testing here.
+				ProxySourceService: "",
+				GRPC: GRPC{
+					AgentAddress: ipv6loopback,
+					AgentPort:    "8502", // Note this is the gRPC port
+				},
+				AdminAccessLogPath:    "/dev/null",
+				AdminBindAddress:      ipv6loopback,
+				AdminBindPort:         "19000",
+				LocalAgentClusterName: xds.LocalAgentClusterName,
+				Token:                 "c9a52720-bf6c-4aa6-b8bc-66881a5ade95",
+				PrometheusScrapePath:  "/metrics",
+			},
+		},
+		{
 			Name: "grpc-addr-flag",
 			Flags: []string{"-proxy-id", "test-proxy",
 				"-grpc-addr", "localhost:9999"},
@@ -449,6 +750,31 @@ func TestGenerateConfig(t *testing.T) {
 				},
 				AdminAccessLogPath:    "/dev/null",
 				AdminBindAddress:      "127.0.0.1",
+				AdminBindPort:         "19000",
+				LocalAgentClusterName: xds.LocalAgentClusterName,
+				PrometheusScrapePath:  "/metrics",
+			},
+		},
+		{
+			Name: "grpc-addr-flag-with-dual-stack",
+			Flags: []string{"-proxy-id", "test-proxy",
+				"-grpc-addr", "localhost:9999"},
+			IsDualStack: true,
+			WantArgs: BootstrapTplArgs{
+				ProxyCluster: "test-proxy",
+				ProxyID:      "test-proxy",
+				// We don't know this til after the lookup so it will be empty in the
+				// initial args call we are testing here.
+				ProxySourceService: "",
+				// Should resolve IP, note this might not resolve the same way
+				// everywhere which might make this test brittle but not sure what else
+				// to do.
+				GRPC: GRPC{
+					AgentAddress: ipv4loopback,
+					AgentPort:    "9999",
+				},
+				AdminAccessLogPath:    "/dev/null",
+				AdminBindAddress:      ipv6loopback,
 				AdminBindPort:         "19000",
 				LocalAgentClusterName: xds.LocalAgentClusterName,
 				PrometheusScrapePath:  "/metrics",
@@ -481,6 +807,33 @@ func TestGenerateConfig(t *testing.T) {
 			},
 		},
 		{
+			Name:        "grpc-addr-env-dualstack",
+			Flags:       []string{"-proxy-id", "test-proxy"},
+			IsDualStack: true,
+			Env: []string{
+				"CONSUL_GRPC_ADDR=localhost:9999",
+			},
+			WantArgs: BootstrapTplArgs{
+				ProxyCluster: "test-proxy",
+				ProxyID:      "test-proxy",
+				// We don't know this til after the lookup so it will be empty in the
+				// initial args call we are testing here.
+				ProxySourceService: "",
+				// Should resolve IP, note this might not resolve the same way
+				// everywhere which might make this test brittle but not sure what else
+				// to do.
+				GRPC: GRPC{
+					AgentAddress: "127.0.0.1",
+					AgentPort:    "9999",
+				},
+				AdminAccessLogPath:    "/dev/null",
+				AdminBindAddress:      ipv6loopback,
+				AdminBindPort:         "19000",
+				LocalAgentClusterName: xds.LocalAgentClusterName,
+				PrometheusScrapePath:  "/metrics",
+			},
+		},
+		{
 			Name: "grpc-addr-unix",
 			Flags: []string{"-proxy-id", "test-proxy",
 				"-grpc-addr", "unix:///var/run/consul.sock"},
@@ -501,6 +854,27 @@ func TestGenerateConfig(t *testing.T) {
 			},
 		},
 		{
+			Name: "grpc-addr-unix-dualstack",
+			Flags: []string{"-proxy-id", "test-proxy",
+				"-grpc-addr", "unix:///var/run/consul.sock"},
+			IsDualStack: true,
+			WantArgs: BootstrapTplArgs{
+				ProxyCluster: "test-proxy",
+				ProxyID:      "test-proxy",
+				// We don't know this til after the lookup so it will be empty in the
+				// initial args call we are testing here.
+				ProxySourceService: "",
+				GRPC: GRPC{
+					AgentSocket: "/var/run/consul.sock",
+				},
+				AdminAccessLogPath:    "/dev/null",
+				AdminBindAddress:      ipv6loopback,
+				AdminBindPort:         "19000",
+				LocalAgentClusterName: xds.LocalAgentClusterName,
+				PrometheusScrapePath:  "/metrics",
+			},
+		},
+		{
 			Name: "grpc-addr-unix-with-tls",
 			Flags: []string{"-proxy-id", "test-proxy",
 				"-grpc-ca-file", "../../../test/ca/root.cer",
@@ -514,6 +888,27 @@ func TestGenerateConfig(t *testing.T) {
 				},
 				AdminAccessLogPath:    "/dev/null",
 				AdminBindAddress:      "127.0.0.1",
+				AdminBindPort:         "19000",
+				AgentCAPEM:            rootPEM,
+				LocalAgentClusterName: xds.LocalAgentClusterName,
+				PrometheusScrapePath:  "/metrics",
+			},
+		},
+		{
+			Name: "grpc-addr-unix-with-tls-dualstack",
+			Flags: []string{"-proxy-id", "test-proxy",
+				"-grpc-ca-file", "../../../test/ca/root.cer",
+				"-grpc-addr", "unix:///var/run/consul.sock"},
+			IsDualStack: true,
+			WantArgs: BootstrapTplArgs{
+				ProxyCluster: "test-proxy",
+				ProxyID:      "test-proxy",
+				GRPC: GRPC{
+					AgentSocket: "/var/run/consul.sock",
+					AgentTLS:    true,
+				},
+				AdminAccessLogPath:    "/dev/null",
+				AdminBindAddress:      ipv6loopback,
 				AdminBindPort:         "19000",
 				AgentCAPEM:            rootPEM,
 				LocalAgentClusterName: xds.LocalAgentClusterName,
@@ -545,8 +940,33 @@ func TestGenerateConfig(t *testing.T) {
 			},
 		},
 		{
+			Name:        "xds-addr-config-dualstack",
+			Flags:       []string{"-proxy-id", "test-proxy"},
+			IsDualStack: true,
+			XDSPorts:    agent.GRPCPorts{Plaintext: 9999, TLS: 0},
+			WantArgs: BootstrapTplArgs{
+				ProxyCluster: "test-proxy",
+				ProxyID:      "test-proxy",
+				// We don't know this til after the lookup so it will be empty in the
+				// initial args call we are testing here.
+				ProxySourceService: "",
+				// Should resolve IP, note this might not resolve the same way
+				// everywhere which might make this test brittle but not sure what else
+				// to do.
+				GRPC: GRPC{
+					AgentAddress: ipv6loopback,
+					AgentPort:    "9999",
+				},
+				AdminAccessLogPath:    "/dev/null",
+				AdminBindAddress:      ipv6loopback,
+				AdminBindPort:         "19000",
+				LocalAgentClusterName: xds.LocalAgentClusterName,
+				PrometheusScrapePath:  "/metrics",
+			},
+		},
+		{
 			Name:         "grpc-tls-addr-config",
-			Flags:        []string{"-proxy-id", "test-proxy"},
+			Flags:        []string{"-proxy-id", "test-proxy", "-ca-file", "../../../test/ca/root.cer"},
 			XDSPorts:     agent.GRPCPorts{Plaintext: 9997, TLS: 9998},
 			AgentSelf110: false,
 			WantArgs: BootstrapTplArgs{
@@ -563,8 +983,37 @@ func TestGenerateConfig(t *testing.T) {
 					AgentPort:    "9998",
 					AgentTLS:     true,
 				},
+				AgentCAPEM:            "-----BEGIN CERTIFICATE-----\\nMIIEEzCCAvugAwIBAgIUIYIXKNRBFBPuuOit2D2CfVJAoDAwDQYJKoZIhvcNAQEL\\nBQAwgZgxCzAJBgNVBAYTAlVTMQswCQYDVQQIDAJDQTEWMBQGA1UEBwwNU2FuIEZy\\nYW5jaXNjbzEcMBoGA1UECgwTSGFzaGlDb3JwIFRlc3QgQ2VydDEMMAoGA1UECwwD\\nRGV2MRYwFAYDVQQDDA10ZXN0LmludGVybmFsMSAwHgYJKoZIhvcNAQkBFhF0ZXN0\\nQGludGVybmFsLmNvbTAeFw0yMzExMDIxNTUwMjlaFw0zMzEwMzAxNTUwMjlaMIGY\\nMQswCQYDVQQGEwJVUzELMAkGA1UECAwCQ0ExFjAUBgNVBAcMDVNhbiBGcmFuY2lz\\nY28xHDAaBgNVBAoME0hhc2hpQ29ycCBUZXN0IENlcnQxDDAKBgNVBAsMA0RldjEW\\nMBQGA1UEAwwNdGVzdC5pbnRlcm5hbDEgMB4GCSqGSIb3DQEJARYRdGVzdEBpbnRl\\ncm5hbC5jb20wggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCIA00iG5Iv\\neRzZwf2P1Laih3eoiK2Wl1Re22cz2Pcpf6gb7agPguwU5Hco0DWzsnmek2Qyw9gl\\noroX1t7LbTW2rxbK1hP7PkFCwSxi9u8MZDaLF3a79bwbsYZzf3toeoz8DCBxo9bB\\nSSACj4uI/S+lUjMctQrK1nFjGoNUHfxioXPwIJH+TS/76TiZPu3Zj6kN6taVFNe3\\nISBNXW6Vg8E3koz+9Bwv0a6Ty7oFRoJXpsud1k/83Iy288jhYDuB56+ypUmcCNqG\\nT+e0Bn/VXHx26GXTx97cXSLJE+o+JrHZaI1TcQUL2Z5DJZVJRUg/wtcXggoMLVI1\\nO0enJm2jdmLXAgMBAAGjUzBRMB0GA1UdDgQWBBTmrmqnZIdFOj6vhCUAJKLZNUDw\\nFDAfBgNVHSMEGDAWgBTmrmqnZIdFOj6vhCUAJKLZNUDwFDAPBgNVHRMBAf8EBTAD\\nAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQB3j6gvalxq54hZSwVmVZPMzjdTVYRC11b0\\n6C9pWKsLwu+WINcs59ui8wpYVjcw1AK4/2I1Q7P4RgpSarAxG5tYIMB1xcfFKqBn\\nf/dDXexONgwpW6SoBJ58c7OB/aH8CenDT8Vwk3fwjYslOywbFRqBjH+PB8uTlu0e\\nD1fzjpcQCrQeA5VD4pjJAaTmi7bLVuH5XIya3++f/N3xOn53GVMUDO1OdFz8ZMvJ\\nWrrg7E/wMXB1b5Wo2n2ypVU4sejikSjg2nfdLojUWGMrZ8TuUnjFs88PeQ9CObAp\\nA36dLfs4JLF3sVOtqTd6BGwegDsmmllYO5Ky6I+laoLSHpGDEihS\\n-----END CERTIFICATE-----\\n",
 				AdminAccessLogPath:    "/dev/null",
 				AdminBindAddress:      "127.0.0.1",
+				AdminBindPort:         "19000",
+				LocalAgentClusterName: xds.LocalAgentClusterName,
+				PrometheusScrapePath:  "/metrics",
+			},
+		},
+		{
+			Name:         "grpc-tls-addr-config-dualstack",
+			Flags:        []string{"-proxy-id", "test-proxy", "-ca-file", "../../../test/ca/root.cer"},
+			IsDualStack:  true,
+			XDSPorts:     agent.GRPCPorts{Plaintext: 9997, TLS: 9998},
+			AgentSelf110: false,
+			WantArgs: BootstrapTplArgs{
+				ProxyCluster: "test-proxy",
+				ProxyID:      "test-proxy",
+				// We don't know this til after the lookup so it will be empty in the
+				// initial args call we are testing here.
+				ProxySourceService: "",
+				// Should resolve IP, note this might not resolve the same way
+				// everywhere which might make this test brittle but not sure what else
+				// to do.
+				GRPC: GRPC{
+					AgentAddress: ipv6loopback,
+					AgentPort:    "9998",
+					AgentTLS:     true,
+				},
+				AgentCAPEM:            "-----BEGIN CERTIFICATE-----\\nMIIEEzCCAvugAwIBAgIUIYIXKNRBFBPuuOit2D2CfVJAoDAwDQYJKoZIhvcNAQEL\\nBQAwgZgxCzAJBgNVBAYTAlVTMQswCQYDVQQIDAJDQTEWMBQGA1UEBwwNU2FuIEZy\\nYW5jaXNjbzEcMBoGA1UECgwTSGFzaGlDb3JwIFRlc3QgQ2VydDEMMAoGA1UECwwD\\nRGV2MRYwFAYDVQQDDA10ZXN0LmludGVybmFsMSAwHgYJKoZIhvcNAQkBFhF0ZXN0\\nQGludGVybmFsLmNvbTAeFw0yMzExMDIxNTUwMjlaFw0zMzEwMzAxNTUwMjlaMIGY\\nMQswCQYDVQQGEwJVUzELMAkGA1UECAwCQ0ExFjAUBgNVBAcMDVNhbiBGcmFuY2lz\\nY28xHDAaBgNVBAoME0hhc2hpQ29ycCBUZXN0IENlcnQxDDAKBgNVBAsMA0RldjEW\\nMBQGA1UEAwwNdGVzdC5pbnRlcm5hbDEgMB4GCSqGSIb3DQEJARYRdGVzdEBpbnRl\\ncm5hbC5jb20wggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCIA00iG5Iv\\neRzZwf2P1Laih3eoiK2Wl1Re22cz2Pcpf6gb7agPguwU5Hco0DWzsnmek2Qyw9gl\\noroX1t7LbTW2rxbK1hP7PkFCwSxi9u8MZDaLF3a79bwbsYZzf3toeoz8DCBxo9bB\\nSSACj4uI/S+lUjMctQrK1nFjGoNUHfxioXPwIJH+TS/76TiZPu3Zj6kN6taVFNe3\\nISBNXW6Vg8E3koz+9Bwv0a6Ty7oFRoJXpsud1k/83Iy288jhYDuB56+ypUmcCNqG\\nT+e0Bn/VXHx26GXTx97cXSLJE+o+JrHZaI1TcQUL2Z5DJZVJRUg/wtcXggoMLVI1\\nO0enJm2jdmLXAgMBAAGjUzBRMB0GA1UdDgQWBBTmrmqnZIdFOj6vhCUAJKLZNUDw\\nFDAfBgNVHSMEGDAWgBTmrmqnZIdFOj6vhCUAJKLZNUDwFDAPBgNVHRMBAf8EBTAD\\nAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQB3j6gvalxq54hZSwVmVZPMzjdTVYRC11b0\\n6C9pWKsLwu+WINcs59ui8wpYVjcw1AK4/2I1Q7P4RgpSarAxG5tYIMB1xcfFKqBn\\nf/dDXexONgwpW6SoBJ58c7OB/aH8CenDT8Vwk3fwjYslOywbFRqBjH+PB8uTlu0e\\nD1fzjpcQCrQeA5VD4pjJAaTmi7bLVuH5XIya3++f/N3xOn53GVMUDO1OdFz8ZMvJ\\nWrrg7E/wMXB1b5Wo2n2ypVU4sejikSjg2nfdLojUWGMrZ8TuUnjFs88PeQ9CObAp\\nA36dLfs4JLF3sVOtqTd6BGwegDsmmllYO5Ky6I+laoLSHpGDEihS\\n-----END CERTIFICATE-----\\n",
+				AdminAccessLogPath:    "/dev/null",
+				AdminBindAddress:      ipv6loopback,
 				AdminBindPort:         "19000",
 				LocalAgentClusterName: xds.LocalAgentClusterName,
 				PrometheusScrapePath:  "/metrics",
@@ -596,6 +1045,32 @@ func TestGenerateConfig(t *testing.T) {
 			},
 		},
 		{
+			Name:         "deprecated-grpc-addr-config-dualstack",
+			Flags:        []string{"-proxy-id", "test-proxy"},
+			IsDualStack:  true,
+			XDSPorts:     agent.GRPCPorts{Plaintext: 9999, TLS: 0},
+			AgentSelf110: true,
+			WantArgs: BootstrapTplArgs{
+				ProxyCluster: "test-proxy",
+				ProxyID:      "test-proxy",
+				// We don't know this til after the lookup so it will be empty in the
+				// initial args call we are testing here.
+				ProxySourceService: "",
+				// Should resolve IP, note this might not resolve the same way
+				// everywhere which might make this test brittle but not sure what else
+				// to do.
+				GRPC: GRPC{
+					AgentAddress: ipv6loopback,
+					AgentPort:    "9999",
+				},
+				AdminAccessLogPath:    "/dev/null",
+				AdminBindAddress:      ipv6loopback,
+				AdminBindPort:         "19000",
+				LocalAgentClusterName: xds.LocalAgentClusterName,
+				PrometheusScrapePath:  "/metrics",
+			},
+		},
+		{
 			Name:     "access-log-path",
 			Flags:    []string{"-proxy-id", "test-proxy", "-admin-access-log-path", "/some/path/access.log"},
 			WantWarn: "-admin-access-log-path is deprecated",
@@ -614,6 +1089,31 @@ func TestGenerateConfig(t *testing.T) {
 				},
 				AdminAccessLogPath:    "/some/path/access.log",
 				AdminBindAddress:      "127.0.0.1",
+				AdminBindPort:         "19000",
+				LocalAgentClusterName: xds.LocalAgentClusterName,
+				PrometheusScrapePath:  "/metrics",
+			},
+		},
+		{
+			Name:        "access-log-path-dualstack",
+			Flags:       []string{"-proxy-id", "test-proxy", "-admin-access-log-path", "/some/path/access.log"},
+			IsDualStack: true,
+			WantWarn:    "-admin-access-log-path is deprecated",
+			WantArgs: BootstrapTplArgs{
+				ProxyCluster: "test-proxy",
+				ProxyID:      "test-proxy",
+				// We don't know this til after the lookup so it will be empty in the
+				// initial args call we are testing here.
+				ProxySourceService: "",
+				// Should resolve IP, note this might not resolve the same way
+				// everywhere which might make this test brittle but not sure what else
+				// to do.
+				GRPC: GRPC{
+					AgentAddress: ipv6loopback,
+					AgentPort:    "8502",
+				},
+				AdminAccessLogPath:    "/some/path/access.log",
+				AdminBindAddress:      ipv6loopback,
 				AdminBindPort:         "19000",
 				LocalAgentClusterName: xds.LocalAgentClusterName,
 				PrometheusScrapePath:  "/metrics",
@@ -652,9 +1152,43 @@ func TestGenerateConfig(t *testing.T) {
 			},
 		},
 		{
+			Name:        "existing-ca-file-dualstack",
+			TLSServer:   true,
+			Flags:       []string{"-proxy-id", "test-proxy", "-grpc-ca-file", "../../../test/ca/root.cer"},
+			IsDualStack: true,
+			Env:         []string{"CONSUL_GRPC_ADDR=https://127.0.0.1:8502"},
+			WantArgs: BootstrapTplArgs{
+				ProxyCluster: "test-proxy",
+				ProxyID:      "test-proxy",
+				// We don't know this til after the lookup so it will be empty in the
+				// initial args call we are testing here.
+				ProxySourceService: "",
+				// Should resolve IP, note this might not resolve the same way
+				// everywhere which might make this test brittle but not sure what else
+				// to do.
+				GRPC: GRPC{
+					AgentAddress: "127.0.0.1",
+					AgentPort:    "8502",
+					AgentTLS:     true,
+				},
+				AgentCAPEM:            rootPEM,
+				AdminAccessLogPath:    "/dev/null",
+				AdminBindAddress:      ipv6loopback,
+				AdminBindPort:         "19000",
+				LocalAgentClusterName: xds.LocalAgentClusterName,
+				PrometheusScrapePath:  "/metrics",
+			},
+		},
+		{
 			Name:    "missing-ca-path",
 			Flags:   []string{"-proxy-id", "test-proxy", "-ca-path", "some/path"},
 			WantErr: "lstat some/path: no such file or directory",
+		},
+		{
+			Name:        "missing-ca-path-dualstack",
+			Flags:       []string{"-proxy-id", "test-proxy", "-ca-path", "some/path"},
+			IsDualStack: true,
+			WantErr:     "lstat some/path: no such file or directory",
 		},
 		{
 			Name:      "existing-ca-path",
@@ -678,6 +1212,34 @@ func TestGenerateConfig(t *testing.T) {
 				AgentCAPEM:            pathPEM,
 				AdminAccessLogPath:    "/dev/null",
 				AdminBindAddress:      "127.0.0.1",
+				AdminBindPort:         "19000",
+				LocalAgentClusterName: xds.LocalAgentClusterName,
+				PrometheusScrapePath:  "/metrics",
+			},
+		},
+		{
+			Name:        "existing-ca-path-dualstack",
+			TLSServer:   true,
+			Flags:       []string{"-proxy-id", "test-proxy", "-grpc-ca-path", "../../../test/ca_path/"},
+			IsDualStack: true,
+			Env:         []string{"CONSUL_GRPC_ADDR=https://127.0.0.1:8502"},
+			WantArgs: BootstrapTplArgs{
+				ProxyCluster: "test-proxy",
+				ProxyID:      "test-proxy",
+				// We don't know this til after the lookup so it will be empty in the
+				// initial args call we are testing here.
+				ProxySourceService: "",
+				// Should resolve IP, note this might not resolve the same way
+				// everywhere which might make this test brittle but not sure what else
+				// to do.
+				GRPC: GRPC{
+					AgentAddress: "127.0.0.1",
+					AgentPort:    "8502",
+					AgentTLS:     true,
+				},
+				AgentCAPEM:            pathPEM,
+				AdminAccessLogPath:    "/dev/null",
+				AdminBindAddress:      ipv6loopback,
 				AdminBindPort:         "19000",
 				LocalAgentClusterName: xds.LocalAgentClusterName,
 				PrometheusScrapePath:  "/metrics",
@@ -734,6 +1296,57 @@ func TestGenerateConfig(t *testing.T) {
 			},
 		},
 		{
+			Name:        "custom-bootstrap-dualstack",
+			Flags:       []string{"-proxy-id", "test-proxy"},
+			IsDualStack: true,
+			ProxyConfig: map[string]interface{}{
+				// Add a completely custom bootstrap template. Never mind if this is
+				// invalid envoy config just as long as it works and gets the variables
+				// interplated.
+				"envoy_bootstrap_json_tpl": `
+				{
+					"admin": {
+						"access_log": [
+						  {
+							"name": "envoy.access_loggers.file",
+							"typed_config": {
+							  "@type": "type.googleapis.com/envoy.extensions.access_loggers.file.v3.FileAccessLog",
+							  "path": "/dev/null"
+							}
+						  }
+						],
+						"address": {
+							"socket_address": {
+								"address": "{{ .AdminBindAddress }}",
+								"port_value": {{ .AdminBindPort }}
+							}
+						}
+					},
+					"node": {
+						"cluster": "{{ .ProxyCluster }}",
+						"id": "{{ .ProxyID }}"
+					},
+					"custom_field": "foo"
+				}`,
+			},
+			WantArgs: BootstrapTplArgs{
+				ProxyCluster: "test-proxy",
+				ProxyID:      "test-proxy",
+				// We don't know this til after the lookup so it will be empty in the
+				// initial args call we are testing here.
+				ProxySourceService: "",
+				GRPC: GRPC{
+					AgentAddress: ipv6loopback,
+					AgentPort:    "8502",
+				},
+				AdminAccessLogPath:    "/dev/null",
+				AdminBindAddress:      ipv6loopback,
+				AdminBindPort:         "19000",
+				LocalAgentClusterName: xds.LocalAgentClusterName,
+				PrometheusScrapePath:  "/metrics",
+			},
+		},
+		{
 			Name:  "extra_-single",
 			Flags: []string{"-proxy-id", "test-proxy"},
 			ProxyConfig: map[string]interface{}{
@@ -765,6 +1378,44 @@ func TestGenerateConfig(t *testing.T) {
 				},
 				AdminAccessLogPath:    "/dev/null",
 				AdminBindAddress:      "127.0.0.1",
+				AdminBindPort:         "19000",
+				LocalAgentClusterName: xds.LocalAgentClusterName,
+				PrometheusScrapePath:  "/metrics",
+			},
+		},
+		{
+			Name:        "extra_-single-dualstack",
+			Flags:       []string{"-proxy-id", "test-proxy"},
+			IsDualStack: true,
+			ProxyConfig: map[string]interface{}{
+				// Add a custom sections with interpolated variables. These are all
+				// invalid config syntax too but we are just testing they have the right
+				// effect.
+				"envoy_extra_static_clusters_json": `
+				{
+					"name": "fake_cluster_1"
+				}`,
+				"envoy_extra_static_listeners_json": `
+				{
+					"name": "fake_listener_1"
+				}`,
+				"envoy_extra_stats_sinks_json": `
+				{
+					"name": "fake_sink_1"
+				}`,
+			},
+			WantArgs: BootstrapTplArgs{
+				ProxyCluster: "test-proxy",
+				ProxyID:      "test-proxy",
+				// We don't know this til after the lookup so it will be empty in the
+				// initial args call we are testing here.
+				ProxySourceService: "",
+				GRPC: GRPC{
+					AgentAddress: ipv6loopback,
+					AgentPort:    "8502",
+				},
+				AdminAccessLogPath:    "/dev/null",
+				AdminBindAddress:      ipv6loopback,
 				AdminBindPort:         "19000",
 				LocalAgentClusterName: xds.LocalAgentClusterName,
 				PrometheusScrapePath:  "/metrics",
@@ -813,6 +1464,49 @@ func TestGenerateConfig(t *testing.T) {
 			},
 		},
 		{
+			Name:        "extra_-multiple-dualstack",
+			Flags:       []string{"-proxy-id", "test-proxy"},
+			IsDualStack: true,
+			ProxyConfig: map[string]interface{}{
+				// Add a custom sections with interpolated variables. These are all
+				// invalid config syntax too but we are just testing they have the right
+				// effect.
+				"envoy_extra_static_clusters_json": `
+				{
+					"name": "fake_cluster_1"
+				},
+				{
+					"name": "fake_cluster_2"
+				}`,
+				"envoy_extra_static_listeners_json": `
+				{
+					"name": "fake_listener_1"
+				},{
+					"name": "fake_listener_2"
+				}`,
+				"envoy_extra_stats_sinks_json": `
+				{
+					"name": "fake_sink_1"
+				} , { "name": "fake_sink_2" }`,
+			},
+			WantArgs: BootstrapTplArgs{
+				ProxyCluster: "test-proxy",
+				ProxyID:      "test-proxy",
+				// We don't know this til after the lookup so it will be empty in the
+				// initial args call we are testing here.
+				ProxySourceService: "",
+				GRPC: GRPC{
+					AgentAddress: ipv6loopback,
+					AgentPort:    "8502",
+				},
+				AdminAccessLogPath:    "/dev/null",
+				AdminBindAddress:      ipv6loopback,
+				AdminBindPort:         "19000",
+				LocalAgentClusterName: xds.LocalAgentClusterName,
+				PrometheusScrapePath:  "/metrics",
+			},
+		},
+		{
 			Name:  "stats-config-override",
 			Flags: []string{"-proxy-id", "test-proxy"},
 			ProxyConfig: map[string]interface{}{
@@ -836,6 +1530,36 @@ func TestGenerateConfig(t *testing.T) {
 				},
 				AdminAccessLogPath:    "/dev/null",
 				AdminBindAddress:      "127.0.0.1",
+				AdminBindPort:         "19000",
+				LocalAgentClusterName: xds.LocalAgentClusterName,
+				PrometheusScrapePath:  "/metrics",
+			},
+		},
+		{
+			Name:        "stats-config-override-dualstack",
+			Flags:       []string{"-proxy-id", "test-proxy"},
+			IsDualStack: true,
+			ProxyConfig: map[string]interface{}{
+				// Add a custom sections with interpolated variables. These are all
+				// invalid config syntax too but we are just testing they have the right
+				// effect.
+				"envoy_stats_config_json": `
+				{
+					"name": "fake_config"
+				}`,
+			},
+			WantArgs: BootstrapTplArgs{
+				ProxyCluster: "test-proxy",
+				ProxyID:      "test-proxy",
+				// We don't know this til after the lookup so it will be empty in the
+				// initial args call we are testing here.
+				ProxySourceService: "",
+				GRPC: GRPC{
+					AgentAddress: ipv6loopback,
+					AgentPort:    "8502",
+				},
+				AdminAccessLogPath:    "/dev/null",
+				AdminBindAddress:      ipv6loopback,
 				AdminBindPort:         "19000",
 				LocalAgentClusterName: xds.LocalAgentClusterName,
 				PrometheusScrapePath:  "/metrics",
@@ -901,6 +1625,66 @@ func TestGenerateConfig(t *testing.T) {
 			},
 		},
 		{
+			Name:        "zipkin-tracing-config-dualstack",
+			Flags:       []string{"-proxy-id", "test-proxy"},
+			IsDualStack: true,
+			ProxyConfig: map[string]interface{}{
+				// Add a custom sections with interpolated variables. These are all
+				// invalid config syntax too but we are just testing they have the right
+				// effect.
+				"envoy_tracing_json": `{
+					"http": {
+						"name": "envoy.zipkin",
+						"config": {
+							"collector_cluster": "zipkin",
+							"collector_endpoint": "/api/v1/spans"
+						}
+					}
+				}`,
+				// Need to setup the cluster to send that too as well
+				"envoy_extra_static_clusters_json": `{
+					"name": "zipkin",
+					"type": "STRICT_DNS",
+					"connect_timeout": "5s",
+					"load_assignment": {
+						"cluster_name": "zipkin",
+						"endpoints": [
+							{
+								"lb_endpoints": [
+									{
+										"endpoint": {
+											"address": {
+												"socket_address": {
+													"address": "zipkin.service.consul",
+													"port_value": 9411
+												}
+											}
+										}
+									}
+								]
+							}
+						]
+					}
+				}`,
+			},
+			WantArgs: BootstrapTplArgs{
+				ProxyCluster: "test-proxy",
+				ProxyID:      "test-proxy",
+				// We don't know this til after the lookup so it will be empty in the
+				// initial args call we are testing here.
+				ProxySourceService: "",
+				GRPC: GRPC{
+					AgentAddress: ipv6loopback,
+					AgentPort:    "8502",
+				},
+				AdminAccessLogPath:    "/dev/null",
+				AdminBindAddress:      ipv6loopback,
+				AdminBindPort:         "19000",
+				LocalAgentClusterName: xds.LocalAgentClusterName,
+				PrometheusScrapePath:  "/metrics",
+			},
+		},
+		{
 			Name:  "CONSUL_HTTP_ADDR-with-https-scheme-does-not-affect-grpc-tls",
 			Flags: []string{"-proxy-id", "test-proxy", "-ca-file", "../../../test/ca/root.cer"},
 			Env:   []string{"CONSUL_HTTP_ADDR=https://127.0.0.1:8500"},
@@ -950,6 +1734,15 @@ func TestGenerateConfig(t *testing.T) {
 				LocalAgentClusterName: xds.LocalAgentClusterName,
 				PrometheusScrapePath:  "/metrics",
 			},
+		},
+		// Error case: TLS enabled but no CA material available
+		// Previously this would silently generate invalid bootstrap (empty trusted_ca),
+		// now it should return an error to properly inform the user of the misconfiguration.
+		{
+			Name:    "https-scheme-no-ca-error",
+			Flags:   []string{"-proxy-id", "test-proxy"},
+			Env:     []string{"CONSUL_GRPC_ADDR=https://127.0.0.1:8502"},
+			WantErr: "TLS is enabled for xDS connections but no CA certificates are available",
 		},
 		{
 			Name:  "both-CONSUL_HTTP_ADDR-TLS-and-CONSUL_GRPC_ADDR-PLAIN-is-plain",
@@ -1085,6 +1878,42 @@ func TestGenerateConfig(t *testing.T) {
 			},
 		},
 		{
+			Name:  "ingress-gateway-register-with-service-without-proxy-id-without-address",
+			Flags: []string{"-gateway", "ingress", "-register", "-service", "my-gateway"},
+			WantArgs: BootstrapTplArgs{
+				ProxyCluster:       "my-gateway",
+				ProxyID:            "my-gateway",
+				ProxySourceService: "my-gateway",
+				GRPC: GRPC{
+					AgentAddress: "127.0.0.1",
+					AgentPort:    "8502",
+				},
+				AdminAccessLogPath:    "/dev/null",
+				AdminBindAddress:      "127.0.0.1",
+				AdminBindPort:         "19000",
+				LocalAgentClusterName: xds.LocalAgentClusterName,
+				PrometheusScrapePath:  "/metrics",
+			},
+		},
+		{
+			Name:  "ingress-gateway-without-address",
+			Flags: []string{"-proxy-id", "ingress-gateway", "-gateway", "ingress"},
+			WantArgs: BootstrapTplArgs{
+				ProxyCluster:       "ingress-gateway",
+				ProxyID:            "ingress-gateway",
+				ProxySourceService: "ingress-gateway",
+				GRPC: GRPC{
+					AgentAddress: "127.0.0.1",
+					AgentPort:    "8502",
+				},
+				AdminAccessLogPath:    "/dev/null",
+				AdminBindAddress:      "127.0.0.1",
+				AdminBindPort:         "19000",
+				LocalAgentClusterName: xds.LocalAgentClusterName,
+				PrometheusScrapePath:  "/metrics",
+			},
+		},
+		{
 			Name:  "ingress-gateway-register-with-service-without-proxy-id",
 			Flags: []string{"-gateway", "ingress", "-register", "-service", "my-gateway", "-address", "127.0.0.1:7777"},
 			WantArgs: BootstrapTplArgs{
@@ -1121,8 +1950,62 @@ func TestGenerateConfig(t *testing.T) {
 			},
 		},
 		{
+			Name:  "ingress-gateway-register-with-service-without-proxy-id-without-address",
+			Flags: []string{"-gateway", "ingress", "-register", "-service", "my-gateway"},
+			WantArgs: BootstrapTplArgs{
+				ProxyCluster:       "my-gateway",
+				ProxyID:            "my-gateway",
+				ProxySourceService: "my-gateway",
+				GRPC: GRPC{
+					AgentAddress: "127.0.0.1",
+					AgentPort:    "8502",
+				},
+				AdminAccessLogPath:    "/dev/null",
+				AdminBindAddress:      "127.0.0.1",
+				AdminBindPort:         "19000",
+				LocalAgentClusterName: xds.LocalAgentClusterName,
+				PrometheusScrapePath:  "/metrics",
+			},
+		},
+		{
+			Name:  "ingress-gateway-register-with-service-and-proxy-id-without-address",
+			Flags: []string{"-gateway", "ingress", "-register", "-service", "my-gateway", "-proxy-id", "my-gateway-123"},
+			WantArgs: BootstrapTplArgs{
+				ProxyCluster:       "my-gateway",
+				ProxyID:            "my-gateway-123",
+				ProxySourceService: "my-gateway",
+				GRPC: GRPC{
+					AgentAddress: "127.0.0.1",
+					AgentPort:    "8502",
+				},
+				AdminAccessLogPath:    "/dev/null",
+				AdminBindAddress:      "127.0.0.1",
+				AdminBindPort:         "19000",
+				LocalAgentClusterName: xds.LocalAgentClusterName,
+				PrometheusScrapePath:  "/metrics",
+			},
+		},
+		{
 			Name:  "ingress-gateway-no-auto-register",
 			Flags: []string{"-gateway", "ingress", "-address", "127.0.0.1:7777"},
+			WantArgs: BootstrapTplArgs{
+				ProxyCluster:       "ingress-gateway",
+				ProxyID:            "ingress-gateway",
+				ProxySourceService: "ingress-gateway",
+				GRPC: GRPC{
+					AgentAddress: "127.0.0.1",
+					AgentPort:    "8502",
+				},
+				AdminAccessLogPath:    "/dev/null",
+				AdminBindAddress:      "127.0.0.1",
+				AdminBindPort:         "19000",
+				LocalAgentClusterName: xds.LocalAgentClusterName,
+				PrometheusScrapePath:  "/metrics",
+			},
+		},
+		{
+			Name:  "ingress-gateway-no-auto-register-without-address",
+			Flags: []string{"-gateway", "ingress"},
 			WantArgs: BootstrapTplArgs{
 				ProxyCluster:       "ingress-gateway",
 				ProxyID:            "ingress-gateway",
@@ -1291,6 +2174,10 @@ func TestGenerateConfig(t *testing.T) {
 				return nil, nil
 			}
 
+			c.checkDualStack = func(dto *netutil.IPStackRequestDTO) (bool, error) {
+				return tc.IsDualStack, nil
+			}
+
 			// Run the command
 			myFlags := copyAndReplaceAll(tc.Flags, "@@TEMPDIR@@", testDirPrefix)
 			args := append([]string{"-bootstrap"}, myFlags...)
@@ -1351,6 +2238,7 @@ func TestEnvoy_GatewayRegistration(t *testing.T) {
 			name: "register gateway with proxy-id and name",
 			args: []string{
 				"-http-addr=" + a.HTTPAddr(),
+				"-grpc-addr=http://127.0.0.1:" + strconv.Itoa(a.Config.GRPCPort),
 				"-register",
 				"-bootstrap",
 				"-gateway", "ingress",
@@ -1365,6 +2253,7 @@ func TestEnvoy_GatewayRegistration(t *testing.T) {
 			name: "register gateway without proxy-id with name",
 			args: []string{
 				"-http-addr=" + a.HTTPAddr(),
+				"-grpc-addr=http://127.0.0.1:" + strconv.Itoa(a.Config.GRPCPort),
 				"-register",
 				"-bootstrap",
 				"-gateway", "ingress",
@@ -1378,6 +2267,7 @@ func TestEnvoy_GatewayRegistration(t *testing.T) {
 			name: "register gateway without proxy-id and without name",
 			args: []string{
 				"-http-addr=" + a.HTTPAddr(),
+				"-grpc-addr=http://127.0.0.1:" + strconv.Itoa(a.Config.GRPCPort),
 				"-register",
 				"-bootstrap",
 				"-gateway", "ingress",
@@ -1390,13 +2280,14 @@ func TestEnvoy_GatewayRegistration(t *testing.T) {
 			name: "register gateway with proxy-id without name",
 			args: []string{
 				"-http-addr=" + a.HTTPAddr(),
+				"-grpc-addr=http://127.0.0.1:" + strconv.Itoa(a.Config.GRPCPort),
 				"-register",
 				"-bootstrap",
 				"-gateway", "ingress",
-				"-proxy-id", "us-ingress-1",
+				"-proxy-id", "us-ingress",
 			},
 			kind:    api.ServiceKindIngressGateway,
-			id:      "us-ingress-1",
+			id:      "us-ingress",
 			service: "ingress-gateway",
 		},
 	}
@@ -1405,6 +2296,9 @@ func TestEnvoy_GatewayRegistration(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ui := cli.NewMockUi()
 			c := New(ui)
+			c.checkDualStack = func(dto *netutil.IPStackRequestDTO) (bool, error) {
+				return false, nil
+			}
 
 			code := c.Run(tc.args)
 			if code != 0 {

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package consul
@@ -6,6 +6,7 @@ package consul
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -285,8 +286,8 @@ func (l *leaderFailer) Once(args struct{}, reply *struct{}) error {
 	l.totalCalls++
 	l.onceCalls++
 
-	switch {
-	case l.onceCalls == 1:
+	switch l.onceCalls {
+	case 1:
 		return structs.ErrNoLeader
 
 	default:
@@ -506,8 +507,8 @@ func newClient(t *testing.T, config *Config) *Client {
 
 func newTestResolverConfig(t testutil.TestingTB, suffix string, dc, agentType string) resolver.Config {
 	n := t.Name()
-	s := strings.Replace(n, "/", "", -1)
-	s = strings.Replace(s, "_", "", -1)
+	s := strings.ReplaceAll(n, "/", "")
+	s = strings.ReplaceAll(s, "_", "")
 	return resolver.Config{
 		Datacenter: dc,
 		AgentType:  agentType,
@@ -676,14 +677,22 @@ func TestClient_SnapshotRPC_RateLimit(t *testing.T) {
 	})
 
 	retry.Run(t, func(r *retry.R) {
-		var snap bytes.Buffer
-		args := structs.SnapshotRequest{
-			Datacenter: "dc1",
-			Op:         structs.SnapshotSave,
+		var lastErr error
+		for i := 0; i < conf1.RPCMaxBurst+2; i++ {
+			var snap bytes.Buffer
+			args := structs.SnapshotRequest{
+				Datacenter: "dc1",
+				Op:         structs.SnapshotSave,
+			}
+			lastErr = c1.SnapshotRPC(&args, bytes.NewReader([]byte("")), &snap, nil)
+			if errors.Is(lastErr, structs.ErrRPCRateExceeded) {
+				return
+			}
+			if lastErr != nil {
+				r.Fatalf("unexpected error: %v", lastErr)
+			}
 		}
-		if err := c1.SnapshotRPC(&args, bytes.NewReader([]byte("")), &snap, nil); err != structs.ErrRPCRateExceeded {
-			r.Fatalf("err: %v", err)
-		}
+		r.Fatalf("expected rate limit error, got %v", lastErr)
 	})
 }
 

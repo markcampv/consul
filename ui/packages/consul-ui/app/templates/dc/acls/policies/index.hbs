@@ -4,7 +4,7 @@
 }}
 
 <Route
-  @name={{routeName}}
+  @name={{this.routeName}}
 as |route|>
   <DataLoader
     @src={{
@@ -13,10 +13,9 @@ as |route|>
         partition=route.params.partition
         nspace=route.params.nspace
         dc=route.params.dc
-      )}}
-    as |loader|>
+      )}}>
 
-    <BlockSlot @name="error">
+    <:error as |loader|>
     {{#if (eq loader.error.status '401')}}
       <Consul::Acl::Disabled />
     {{else}}
@@ -25,32 +24,32 @@ as |route|>
         @login={{route.model.app.login.open}}
       />
     {{/if}}
-    </BlockSlot>
+    </:error>
 
-    <BlockSlot @name="loaded">
+    <:loaded as |loader|>
   {{#let
 
     (hash
-      value=(or sortBy "Name:asc")
-      change=(action (mut sortBy) value="target.selected")
+      value=(or this.sortBy "Name:asc")
+      change=(action (mut this.sortBy) value="target.selected")
     )
 
     (hash
       kind=(hash
-        value=(if kind (split kind ',') undefined)
-        change=(action (mut kind) value="target.selectedItems")
+        value=(if this.kind (split this.kind ',') undefined)
+        change=(action (mut this.kind) value="target.selectedItems")
       )
       datacenter=(hash
-        value=(if datacenter (split datacenter ',') undefined)
-        change=(action (mut datacenter) value="target.selectedItems")
+        value=(if this.datacenter (split this.datacenter ',') undefined)
+        change=(action (mut this.datacenter) value="target.selectedItems")
       )
       searchproperty=(hash
-        value=(if (not-eq searchproperty undefined)
-          (split searchproperty ',')
-          searchProperties
+        value=(if (not-eq this.searchproperty undefined)
+          (split this.searchproperty ',')
+          this.searchProperties
         )
-        change=(action (mut searchproperty) value="target.selectedItems")
-        default=searchProperties
+        change=(action (mut this.searchproperty) value="target.selectedItems")
+        default=this.searchProperties
       )
     )
 
@@ -60,12 +59,13 @@ as |route|>
     <AppView
       @login={{route.model.app.login.open}}
       >
-      <BlockSlot @name="header">
+      <:header>
         <h1>
           <route.Title @title="Policies" />
         </h1>
-      </BlockSlot>
-      <BlockSlot @name="actions">
+        <label for="toolbar-toggle"></label>
+      </:header>
+      <:actions>
   {{#if (can "create policies")}}
     <Hds::Button
       @text='Create'
@@ -73,53 +73,55 @@ as |route|>
       data-test-create
     />
   {{/if}}
-      </BlockSlot>
-      <BlockSlot @name="toolbar">
+      </:actions>
+      <:toolbar>
       {{#if (gt items.length 0) }}
-        <Consul::Policy::SearchBar
-          @partition={{route.params.partition}}
-
-          @search={{search}}
-          @onsearch={{action (mut search) value="target.value"}}
-
-          @sort={{sort}}
-
-          @filter={{filters}}
-        />
+        <DataLoader
+          @src={{uri "/${partition}/*/*/datacenters" (hash partition=route.params.partition)}}>
+          <:loaded as |dcLoader|>
+            <Consul::Policy::Toolbar
+              @dcs={{dcLoader.data}}
+              @search={{this.search}}
+              @onsearch={{action (mut this.search) value="target.value"}}
+              @sort={{sort}}
+              @filter={{filters}}
+            />
+          </:loaded>
+        </DataLoader>
       {{/if}}
-      </BlockSlot>
-      <BlockSlot @name="content">
+      </:toolbar>
+      <:content>
         <DataCollection
           @type="policy"
           @sort={{sort.value}}
           @filters={{filters}}
-          @search={{search}}
+          @search={{this.search}}
           @items={{items}}
         as |collection|>
           <collection.Collection>
             <Consul::Policy::List
               @items={{collection.items}}
-              @ondelete={{route-action 'delete'}}
+              @ondelete={{this.delete}}
             />
           </collection.Collection>
           <collection.Empty>
             <EmptyState
               @login={{route.model.app.login.open}}
             >
-              <BlockSlot @name="header">
+              <:header>
                 <h2>
                   {{t 'routes.dc.acls.policies.index.empty.header'
                     items=items.length
                   }}
                 </h2>
-              </BlockSlot>
-              <BlockSlot @name="body">
+              </:header>
+              <:body>
                 {{t 'routes.dc.acls.policies.index.empty.body'
                   items=items.length
                   htmlSafe=true
                 }}
-              </BlockSlot>
-              <BlockSlot @name="actions">
+              </:body>
+              <:actions>
                 <li>
                   <Hds::Link::Standalone
                     @text='Documentation on policies'
@@ -138,14 +140,14 @@ as |route|>
                     @size='small'
                   />
                 </li>
-              </BlockSlot>
+              </:actions>
             </EmptyState>
           </collection.Empty>
         </DataCollection>
-      </BlockSlot>
+      </:content>
     </AppView>
 
   {{/let}}
-    </BlockSlot>
+    </:loaded>
   </DataLoader>
 </Route>

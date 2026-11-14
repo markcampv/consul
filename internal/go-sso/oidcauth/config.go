@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package oidcauth
@@ -87,6 +87,13 @@ type Config struct {
 	// Valid only if Type=oidc
 	OIDCClientSecret string
 
+	// Optionally send a signed JWT ("private key jwt") as a client assertion
+	// for client authentication. This enables enhanced
+	// security by using asymmetric cryptography instead of shared secrets.
+	OIDCClientAssertion *OIDCClientAssertion
+	// Disable S256 PKCE challenge verification
+	OIDCClientUsePKCE *bool
+
 	// Comma-separated list of OIDC scopes
 	//
 	// Valid only if Type=oidc
@@ -108,6 +115,23 @@ type Config struct {
 	//
 	// Valid only if Type=oidc
 	VerboseOIDCLogging bool
+
+	// OIDCPostLogoutRedirectURIs is the list of allowed post_logout_redirect_uri
+	// values that the provider may redirect the user back to after an
+	// RP-Initiated logout. When empty no post_logout_redirect_uri is sent and
+	// the provider displays its own post-logout page.
+	//
+	// Valid only if Type=oidc
+	OIDCPostLogoutRedirectURIs []string
+
+	// OIDCLogoutURL is the provider's RP-Initiated logout endpoint. When set it
+	// is used instead of the end_session_endpoint advertised in the provider's
+	// discovery document. This supports providers that expose a logout endpoint
+	// but do not advertise it via discovery. When empty, the discovered
+	// end_session_endpoint (if any) is used.
+	//
+	// Valid only if Type=oidc
+	OIDCLogoutURL string
 
 	// -------
 	// just for type=jwt
@@ -166,6 +190,30 @@ type Config struct {
 	ClockSkewLeeway time.Duration
 }
 
+// OIDCClientAssertion configures private key JWT client authentication
+// for enhanced security in OIDC flows. This allowing clients to authenticate
+// using signed JWTs instead of shared secrets.
+// See also: structs.OIDCClientAssertion
+type OIDCClientAssertion struct {
+	// Audience is/are who will be processing the assertion.
+	// Typically set to the OIDC provider's token endpoint URL.
+	// Defaults to the parent ACLAuthMethodConfig's OIDCDiscoveryURL
+	Audience []string
+
+	// PrivateKey contains external key material provided by users.
+	// KeySource must be "private_key" to enable this.
+	PrivateKey *OIDCClientAssertionKey
+
+	KeyAlgorithm string
+}
+
+// OIDCClientAssertionKey holds the private key used for signing client assertions
+type OIDCClientAssertionKey struct {
+	// PemKey is the private key, in pem format. It is used to sign the JWT.
+	// Mutually exclusive with PemKeyFile.
+	PemKey string
+}
+
 // Validate returns an error if the config is not valid.
 func (c *Config) Validate() error {
 	validateCtx, validateCtxCancel := context.WithCancel(context.Background())
@@ -179,8 +227,10 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("'OIDCDiscoveryURL' must be set for type %q", c.Type)
 		case c.OIDCClientID == "":
 			return fmt.Errorf("'OIDCClientID' must be set for type %q", c.Type)
-		case c.OIDCClientSecret == "":
-			return fmt.Errorf("'OIDCClientSecret' must be set for type %q", c.Type)
+		case c.OIDCClientSecret == "" && c.OIDCClientAssertion == nil:
+			return fmt.Errorf("'OIDCClientSecret' or 'OIDCClientAssertion' must be set for type %q", c.Type)
+		case c.OIDCClientAssertion != nil && c.OIDCClientAssertion.PrivateKey == nil:
+			return fmt.Errorf("'OIDCClientAssertion.PrivateKey' must be set when 'OIDCClientAssertion' is set for type %q", c.Type)
 		case len(c.AllowedRedirectURIs) == 0:
 			return fmt.Errorf("'AllowedRedirectURIs' must be set for type %q", c.Type)
 		}
@@ -189,6 +239,8 @@ func (c *Config) Validate() error {
 		switch {
 		case c.JWKSURL != "":
 			return fmt.Errorf("'JWKSURL' must not be set for type %q", c.Type)
+		case c.OIDCClientSecret != "" && c.OIDCClientAssertion != nil:
+			return fmt.Errorf("only one of 'OIDCClientSecret' or 'OIDCClientAssertion' can be set for type %q", c.Type)
 		case c.JWKSCACert != "":
 			return fmt.Errorf("'JWKSCACert' must not be set for type %q", c.Type)
 		case len(c.JWTValidationPubKeys) != 0:
@@ -213,6 +265,42 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("Invalid AllowedRedirectURIs provided: %v", bad)
 		}
 
+		// OIDCPostLogoutRedirectURIs must use https per the OIDC RP-Initiated
+		// Logout spec (https://openid.net/specs/openid-connect-rpinitiated-1_0.html).
+		for i, uri := range c.OIDCPostLogoutRedirectURIs {
+			u, err := url.Parse(uri)
+			if err != nil {
+				return fmt.Errorf("'OIDCPostLogoutRedirectURIs[%d]' is not a valid URL: %v", i, err)
+			}
+			if u.Scheme != "https" {
+				return fmt.Errorf("'OIDCPostLogoutRedirectURIs[%d]' must use https, got %q", i, u.Scheme)
+			}
+			if u.Host == "" {
+				return fmt.Errorf("'OIDCPostLogoutRedirectURIs[%d]' must include a host", i)
+			}
+		}
+
+		if c.OIDCLogoutURL != "" {
+			u, err := url.Parse(c.OIDCLogoutURL)
+			if err != nil {
+				return fmt.Errorf("'OIDCLogoutURL' is not a valid URL: %v", err)
+			}
+			if u.Scheme != "https" {
+				return fmt.Errorf("'OIDCLogoutURL' must use https, got %q", u.Scheme)
+			}
+			if u.Host == "" {
+				return fmt.Errorf("'OIDCLogoutURL' must include a host")
+			}
+		}
+
+		if c.OIDCClientAssertion != nil {
+			// Validate KeyAlgorithm if set
+			if c.OIDCClientAssertion.KeyAlgorithm != "" &&
+				c.OIDCClientAssertion.KeyAlgorithm != "RS256" {
+				return fmt.Errorf("'OIDCClientAssertion.KeyAlgorithm' must be 'RS256' currently")
+			}
+		}
+
 	case TypeJWT:
 		// not allowed
 		switch {
@@ -220,6 +308,8 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("'OIDCClientID' must not be set for type %q", c.Type)
 		case c.OIDCClientSecret != "":
 			return fmt.Errorf("'OIDCClientSecret' must not be set for type %q", c.Type)
+		case c.OIDCClientAssertion != nil:
+			return fmt.Errorf("'OIDCClientAssertion' must not be set for type %q", c.Type)
 		case len(c.OIDCScopes) != 0:
 			return fmt.Errorf("'OIDCScopes' must not be set for type %q", c.Type)
 		case len(c.OIDCACRValues) != 0:
@@ -228,6 +318,10 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("'AllowedRedirectURIs' must not be set for type %q", c.Type)
 		case c.VerboseOIDCLogging:
 			return fmt.Errorf("'VerboseOIDCLogging' must not be set for type %q", c.Type)
+		case len(c.OIDCPostLogoutRedirectURIs) != 0:
+			return fmt.Errorf("'OIDCPostLogoutRedirectURIs' must not be set for type %q", c.Type)
+		case c.OIDCLogoutURL != "":
+			return fmt.Errorf("'OIDCLogoutURL' must not be set for type %q", c.Type)
 		}
 
 		methodCount := 0
@@ -347,6 +441,8 @@ func (c *Config) authType() int {
 	case c.OIDCDiscoveryURL != "":
 		if c.OIDCClientID != "" && c.OIDCClientSecret != "" {
 			return authOIDCFlow
+		} else if c.OIDCClientID != "" && c.OIDCClientAssertion != nil {
+			return authOIDCFlow
 		}
 		return authOIDCDiscovery
 	default:
@@ -354,4 +450,4 @@ func (c *Config) authType() int {
 	}
 }
 
-const testJWT = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.Hf3E3iCHzqC5QIQ0nCqS1kw78IiQTRVzsLTuKoDIpdk"
+const testJWT = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.e30.Hf3E3iCHzqC5QIQ0nCqS1kw78IiQTRVzsLTuKoDIpdk"

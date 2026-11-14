@@ -8,6 +8,9 @@ func APIGatewayToStructs(s *APIGateway, t *structs.APIGatewayConfigEntry) {
 	if s == nil {
 		return
 	}
+	if s.TLS != nil {
+		GatewayTLSConfigToStructs(s.TLS, &t.TLS)
+	}
 	{
 		t.Listeners = make([]structs.APIGatewayListener, len(s.Listeners))
 		for i := range s.Listeners {
@@ -16,6 +19,12 @@ func APIGatewayToStructs(s *APIGateway, t *structs.APIGatewayConfigEntry) {
 			}
 		}
 	}
+	if s.Defaults != nil {
+		var x structs.UpstreamLimits
+		UpstreamLimitsToStructs(s.Defaults, &x)
+		t.Defaults = &x
+	}
+	t.ExtAuthz = gwExtAuthzToStructs(s.ExtAuthz)
 	if s.Status != nil {
 		StatusToStructs(s.Status, &t.Status)
 	}
@@ -27,6 +36,11 @@ func APIGatewayFromStructs(t *structs.APIGatewayConfigEntry, s *APIGateway) {
 		return
 	}
 	{
+		var x GatewayTLSConfig
+		GatewayTLSConfigFromStructs(&t.TLS, &x)
+		s.TLS = &x
+	}
+	{
 		s.Listeners = make([]*APIGatewayListener, len(t.Listeners))
 		for i := range t.Listeners {
 			{
@@ -36,6 +50,12 @@ func APIGatewayFromStructs(t *structs.APIGatewayConfigEntry, s *APIGateway) {
 			}
 		}
 	}
+	if t.Defaults != nil {
+		var x UpstreamLimits
+		UpstreamLimitsFromStructs(t.Defaults, &x)
+		s.Defaults = &x
+	}
+	s.ExtAuthz = gwExtAuthzFromStructs(t.ExtAuthz)
 	{
 		var x Status
 		StatusFromStructs(&t.Status, &x)
@@ -65,6 +85,7 @@ func APIGatewayListenerToStructs(s *APIGatewayListener, t *structs.APIGatewayLis
 		APIGatewayPolicyToStructs(s.Default, &x)
 		t.Default = &x
 	}
+	t.MaxRequestHeadersKB = s.MaxRequestHeadersKB
 }
 func APIGatewayListenerFromStructs(t *structs.APIGatewayListener, s *APIGatewayListener) {
 	if s == nil {
@@ -89,6 +110,7 @@ func APIGatewayListenerFromStructs(t *structs.APIGatewayListener, s *APIGatewayL
 		APIGatewayPolicyFromStructs(t.Default, &x)
 		s.Default = &x
 	}
+	s.MaxRequestHeadersKB = t.MaxRequestHeadersKB
 }
 func APIGatewayPolicyToStructs(s *APIGatewayPolicy, t *structs.APIGatewayPolicy) {
 	if s == nil {
@@ -114,6 +136,11 @@ func APIGatewayTLSConfigurationToStructs(s *APIGatewayTLSConfiguration, t *struc
 			}
 		}
 	}
+	if s.SDS != nil {
+		var x structs.GatewayTLSSDSConfig
+		GatewayTLSSDSConfigToStructs(s.SDS, &x)
+		t.SDS = &x
+	}
 	t.MaxVersion = tlsVersionToStructs(s.MaxVersion)
 	t.MinVersion = tlsVersionToStructs(s.MinVersion)
 	t.CipherSuites = cipherSuitesToStructs(s.CipherSuites)
@@ -131,6 +158,11 @@ func APIGatewayTLSConfigurationFromStructs(t *structs.APIGatewayTLSConfiguration
 				s.Certificates[i] = &x
 			}
 		}
+	}
+	if t.SDS != nil {
+		var x GatewayTLSSDSConfig
+		GatewayTLSSDSConfigFromStructs(t.SDS, &x)
+		s.SDS = &x
 	}
 	s.MaxVersion = tlsVersionFromStructs(t.MaxVersion)
 	s.MinVersion = tlsVersionFromStructs(t.MinVersion)
@@ -191,6 +223,23 @@ func BoundAPIGatewayListenerToStructs(s *BoundAPIGatewayListener, t *structs.Bou
 			}
 		}
 	}
+	t.Hostname = s.Hostname
+	t.Port = int(s.Port)
+	t.Protocol = apiGatewayProtocolToStructs(s.Protocol)
+	if s.TLS != nil {
+		APIGatewayTLSConfigurationToStructs(s.TLS, &t.TLS)
+	}
+	if s.Override != nil {
+		var x structs.APIGatewayPolicy
+		APIGatewayPolicyToStructs(s.Override, &x)
+		t.Override = &x
+	}
+	if s.Default != nil {
+		var x structs.APIGatewayPolicy
+		APIGatewayPolicyToStructs(s.Default, &x)
+		t.Default = &x
+	}
+	t.MaxRequestHeadersKB = s.MaxRequestHeadersKB
 }
 func BoundAPIGatewayListenerFromStructs(t *structs.BoundAPIGatewayListener, s *BoundAPIGatewayListener) {
 	if s == nil {
@@ -217,6 +266,25 @@ func BoundAPIGatewayListenerFromStructs(t *structs.BoundAPIGatewayListener, s *B
 			}
 		}
 	}
+	s.Hostname = t.Hostname
+	s.Port = int32(t.Port)
+	s.Protocol = apiGatewayProtocolFromStructs(t.Protocol)
+	{
+		var x APIGatewayTLSConfiguration
+		APIGatewayTLSConfigurationFromStructs(&t.TLS, &x)
+		s.TLS = &x
+	}
+	if t.Override != nil {
+		var x APIGatewayPolicy
+		APIGatewayPolicyFromStructs(t.Override, &x)
+		s.Override = &x
+	}
+	if t.Default != nil {
+		var x APIGatewayPolicy
+		APIGatewayPolicyFromStructs(t.Default, &x)
+		s.Default = &x
+	}
+	s.MaxRequestHeadersKB = t.MaxRequestHeadersKB
 }
 func ConditionToStructs(s *Condition, t *structs.Condition) {
 	if s == nil {
@@ -408,6 +476,130 @@ func ExposePathFromStructs(t *structs.ExposePath, s *ExposePath) {
 	s.Protocol = t.Protocol
 	s.ParsedFromCheck = t.ParsedFromCheck
 }
+func ExtProcFilterToStructs(s *ExtProcFilter, t *structs.ExtProcFilter) {
+	if s == nil {
+		return
+	}
+	t.StatPrefix = s.StatPrefix
+	t.Mode = s.Mode
+	if s.Overrides != nil {
+		var x structs.ExtProcOverrides
+		ExtProcOverridesToStructs(s.Overrides, &x)
+		t.Overrides = &x
+	}
+}
+func ExtProcFilterFromStructs(t *structs.ExtProcFilter, s *ExtProcFilter) {
+	if s == nil {
+		return
+	}
+	s.StatPrefix = t.StatPrefix
+	s.Mode = t.Mode
+	if t.Overrides != nil {
+		var x ExtProcOverrides
+		ExtProcOverridesFromStructs(t.Overrides, &x)
+		s.Overrides = &x
+	}
+}
+func ExtProcMetadataKVToStructs(s *ExtProcMetadataKV, t *structs.ExtProcMetadataKV) {
+	if s == nil {
+		return
+	}
+	t.Key = s.Key
+	t.Value = s.Value
+}
+func ExtProcMetadataKVFromStructs(t *structs.ExtProcMetadataKV, s *ExtProcMetadataKV) {
+	if s == nil {
+		return
+	}
+	s.Key = t.Key
+	s.Value = t.Value
+}
+func ExtProcOverridesToStructs(s *ExtProcOverrides, t *structs.ExtProcOverrides) {
+	if s == nil {
+		return
+	}
+	if s.Processing != nil {
+		var x structs.ExtProcProcessing
+		ExtProcProcessingToStructs(s.Processing, &x)
+		t.Processing = &x
+	}
+	{
+		t.GRPCInitialMetadata = make([]structs.ExtProcMetadataKV, len(s.GRPCInitialMetadata))
+		for i := range s.GRPCInitialMetadata {
+			if s.GRPCInitialMetadata[i] != nil {
+				ExtProcMetadataKVToStructs(s.GRPCInitialMetadata[i], &t.GRPCInitialMetadata[i])
+			}
+		}
+	}
+}
+func ExtProcOverridesFromStructs(t *structs.ExtProcOverrides, s *ExtProcOverrides) {
+	if s == nil {
+		return
+	}
+	if t.Processing != nil {
+		var x ExtProcProcessing
+		ExtProcProcessingFromStructs(t.Processing, &x)
+		s.Processing = &x
+	}
+	{
+		s.GRPCInitialMetadata = make([]*ExtProcMetadataKV, len(t.GRPCInitialMetadata))
+		for i := range t.GRPCInitialMetadata {
+			{
+				var x ExtProcMetadataKV
+				ExtProcMetadataKVFromStructs(&t.GRPCInitialMetadata[i], &x)
+				s.GRPCInitialMetadata[i] = &x
+			}
+		}
+	}
+}
+func ExtProcProcessingToStructs(s *ExtProcProcessing, t *structs.ExtProcProcessing) {
+	if s == nil {
+		return
+	}
+	if s.Request != nil {
+		var x structs.ExtProcProcessingDirection
+		ExtProcProcessingDirectionToStructs(s.Request, &x)
+		t.Request = &x
+	}
+	if s.Response != nil {
+		var x structs.ExtProcProcessingDirection
+		ExtProcProcessingDirectionToStructs(s.Response, &x)
+		t.Response = &x
+	}
+}
+func ExtProcProcessingFromStructs(t *structs.ExtProcProcessing, s *ExtProcProcessing) {
+	if s == nil {
+		return
+	}
+	if t.Request != nil {
+		var x ExtProcProcessingDirection
+		ExtProcProcessingDirectionFromStructs(t.Request, &x)
+		s.Request = &x
+	}
+	if t.Response != nil {
+		var x ExtProcProcessingDirection
+		ExtProcProcessingDirectionFromStructs(t.Response, &x)
+		s.Response = &x
+	}
+}
+func ExtProcProcessingDirectionToStructs(s *ExtProcProcessingDirection, t *structs.ExtProcProcessingDirection) {
+	if s == nil {
+		return
+	}
+	t.HeadersMode = s.HeadersMode
+	t.BodyMode = s.BodyMode
+	t.TrailersMode = s.TrailersMode
+	t.MaxBodyBytes = s.MaxBodyBytes
+}
+func ExtProcProcessingDirectionFromStructs(t *structs.ExtProcProcessingDirection, s *ExtProcProcessingDirection) {
+	if s == nil {
+		return
+	}
+	s.HeadersMode = t.HeadersMode
+	s.BodyMode = t.BodyMode
+	s.TrailersMode = t.TrailersMode
+	s.MaxBodyBytes = t.MaxBodyBytes
+}
 func FileSystemCertificateToStructs(s *FileSystemCertificate, t *structs.FileSystemCertificateConfigEntry) {
 	if s == nil {
 		return
@@ -425,6 +617,34 @@ func FileSystemCertificateFromStructs(t *structs.FileSystemCertificateConfigEntr
 	s.PrivateKey = t.PrivateKey
 	s.Meta = t.Meta
 	s.Hash = t.Hash
+}
+func GatewayCredentialInjectionToStructs(s *GatewayCredentialInjection, t *structs.GatewayCredentialInjection) {
+	if s == nil {
+		return
+	}
+	t.UDSPath = s.UDSPath
+	t.MessageTimeout = s.MessageTimeout
+}
+func GatewayCredentialInjectionFromStructs(t *structs.GatewayCredentialInjection, s *GatewayCredentialInjection) {
+	if s == nil {
+		return
+	}
+	s.UDSPath = t.UDSPath
+	s.MessageTimeout = t.MessageTimeout
+}
+func GatewayServiceCredentialToStructs(s *GatewayServiceCredential, t *structs.GatewayServiceCredential) {
+	if s == nil {
+		return
+	}
+	t.Mode = s.Mode
+	t.BindingID = s.BindingID
+}
+func GatewayServiceCredentialFromStructs(t *structs.GatewayServiceCredential, s *GatewayServiceCredential) {
+	if s == nil {
+		return
+	}
+	s.Mode = t.Mode
+	s.BindingID = t.BindingID
 }
 func GatewayServiceTLSConfigToStructs(s *GatewayServiceTLSConfig, t *structs.GatewayServiceTLSConfig) {
 	if s == nil {
@@ -516,6 +736,15 @@ func HTTPFiltersToStructs(s *HTTPFilters, t *structs.HTTPFilters) {
 		t.TimeoutFilter = &x
 	}
 	t.JWT = routeJWTFilterToStructs(s.JWT)
+	{
+		t.ExtProc = make([]structs.ExtProcFilter, len(s.ExtProc))
+		for i := range s.ExtProc {
+			if s.ExtProc[i] != nil {
+				ExtProcFilterToStructs(s.ExtProc[i], &t.ExtProc[i])
+			}
+		}
+	}
+	t.ExtAuthz = routeExtAuthzFilterToStructs(s.ExtAuthz)
 }
 func HTTPFiltersFromStructs(t *structs.HTTPFilters, s *HTTPFilters) {
 	if s == nil {
@@ -547,6 +776,17 @@ func HTTPFiltersFromStructs(t *structs.HTTPFilters, s *HTTPFilters) {
 		s.TimeoutFilter = &x
 	}
 	s.JWT = routeJWTFilterFromStructs(t.JWT)
+	{
+		s.ExtProc = make([]*ExtProcFilter, len(t.ExtProc))
+		for i := range t.ExtProc {
+			{
+				var x ExtProcFilter
+				ExtProcFilterFromStructs(&t.ExtProc[i], &x)
+				s.ExtProc[i] = &x
+			}
+		}
+	}
+	s.ExtAuthz = routeExtAuthzFilterFromStructs(t.ExtAuthz)
 }
 func HTTPHeaderFilterToStructs(s *HTTPHeaderFilter, t *structs.HTTPHeaderFilter) {
 	if s == nil {
@@ -571,6 +811,7 @@ func HTTPHeaderMatchToStructs(s *HTTPHeaderMatch, t *structs.HTTPHeaderMatch) {
 	t.Match = httpHeaderMatchToStructs(s.Match)
 	t.Name = s.Name
 	t.Value = s.Value
+	t.Invert = s.Invert
 }
 func HTTPHeaderMatchFromStructs(t *structs.HTTPHeaderMatch, s *HTTPHeaderMatch) {
 	if s == nil {
@@ -579,6 +820,7 @@ func HTTPHeaderMatchFromStructs(t *structs.HTTPHeaderMatch, s *HTTPHeaderMatch) 
 	s.Match = httpHeaderMatchFromStructs(t.Match)
 	s.Name = t.Name
 	s.Value = t.Value
+	s.Invert = t.Invert
 }
 func HTTPHeaderModifiersToStructs(s *HTTPHeaderModifiers, t *structs.HTTPHeaderModifiers) {
 	if s == nil {
@@ -844,6 +1086,16 @@ func HTTPServiceToStructs(s *HTTPService, t *structs.HTTPService) {
 	if s.ResponseFilters != nil {
 		HTTPResponseFiltersToStructs(s.ResponseFilters, &t.ResponseFilters)
 	}
+	if s.TLS != nil {
+		var x structs.GatewayServiceTLSConfig
+		GatewayServiceTLSConfigToStructs(s.TLS, &x)
+		t.TLS = &x
+	}
+	if s.Limits != nil {
+		var x structs.UpstreamLimits
+		UpstreamLimitsToStructs(s.Limits, &x)
+		t.Limits = &x
+	}
 	t.EnterpriseMeta = enterpriseMetaToStructs(s.EnterpriseMeta)
 }
 func HTTPServiceFromStructs(t *structs.HTTPService, s *HTTPService) {
@@ -861,6 +1113,16 @@ func HTTPServiceFromStructs(t *structs.HTTPService, s *HTTPService) {
 		var x HTTPResponseFilters
 		HTTPResponseFiltersFromStructs(&t.ResponseFilters, &x)
 		s.ResponseFilters = &x
+	}
+	if t.TLS != nil {
+		var x GatewayServiceTLSConfig
+		GatewayServiceTLSConfigFromStructs(t.TLS, &x)
+		s.TLS = &x
+	}
+	if t.Limits != nil {
+		var x UpstreamLimits
+		UpstreamLimitsFromStructs(t.Limits, &x)
+		s.Limits = &x
 	}
 	s.EnterpriseMeta = enterpriseMetaFromStructs(t.EnterpriseMeta)
 }
@@ -891,6 +1153,276 @@ func HashPolicyFromStructs(t *structs.HashPolicy, s *HashPolicy) {
 	}
 	s.SourceIP = t.SourceIP
 	s.Terminal = t.Terminal
+}
+func InferenceGatewayToStructs(s *InferenceGateway, t *structs.InferenceGatewayConfigEntry) {
+	if s == nil {
+		return
+	}
+	if s.Processor != nil {
+		InferenceGatewayProcessorToStructs(s.Processor, &t.Processor)
+	}
+	if s.Failover != nil {
+		var x structs.InferenceGatewayFailover
+		InferenceGatewayFailoverToStructs(s.Failover, &x)
+		t.Failover = &x
+	}
+	t.RequestTimeout = s.RequestTimeout
+	if s.PII != nil {
+		var x structs.InferenceGatewayPII
+		InferenceGatewayPIIToStructs(s.PII, &x)
+		t.PII = &x
+	}
+	if s.Observability != nil {
+		var x structs.InferenceGatewayObservability
+		InferenceGatewayObservabilityToStructs(s.Observability, &x)
+		t.Observability = &x
+	}
+	t.Meta = s.Meta
+	t.Hash = s.Hash
+}
+func InferenceGatewayFromStructs(t *structs.InferenceGatewayConfigEntry, s *InferenceGateway) {
+	if s == nil {
+		return
+	}
+	{
+		var x InferenceGatewayProcessor
+		InferenceGatewayProcessorFromStructs(&t.Processor, &x)
+		s.Processor = &x
+	}
+	if t.Failover != nil {
+		var x InferenceGatewayFailover
+		InferenceGatewayFailoverFromStructs(t.Failover, &x)
+		s.Failover = &x
+	}
+	s.RequestTimeout = t.RequestTimeout
+	if t.PII != nil {
+		var x InferenceGatewayPII
+		InferenceGatewayPIIFromStructs(t.PII, &x)
+		s.PII = &x
+	}
+	if t.Observability != nil {
+		var x InferenceGatewayObservability
+		InferenceGatewayObservabilityFromStructs(t.Observability, &x)
+		s.Observability = &x
+	}
+	s.Meta = t.Meta
+	s.Hash = t.Hash
+}
+func InferenceGatewayFailoverToStructs(s *InferenceGatewayFailover, t *structs.InferenceGatewayFailover) {
+	if s == nil {
+		return
+	}
+	t.RetryOn = s.RetryOn
+	t.MaxTiers = int(s.MaxTiers)
+	t.PerTryTimeout = s.PerTryTimeout
+}
+func InferenceGatewayFailoverFromStructs(t *structs.InferenceGatewayFailover, s *InferenceGatewayFailover) {
+	if s == nil {
+		return
+	}
+	s.RetryOn = t.RetryOn
+	s.MaxTiers = int32(t.MaxTiers)
+	s.PerTryTimeout = t.PerTryTimeout
+}
+func InferenceGatewayMetricsToStructs(s *InferenceGatewayMetrics, t *structs.InferenceGatewayMetrics) {
+	if s == nil {
+		return
+	}
+	t.Enabled = pointerToBoolFromBoolValue(s.Enabled)
+	if s.Prometheus != nil {
+		var x structs.InferenceGatewayMetricsPrometheus
+		InferenceGatewayMetricsPrometheusToStructs(s.Prometheus, &x)
+		t.Prometheus = &x
+	}
+	if s.OTLP != nil {
+		var x structs.InferenceGatewayOTLPExport
+		InferenceGatewayOTLPExportToStructs(s.OTLP, &x)
+		t.OTLP = &x
+	}
+}
+func InferenceGatewayMetricsFromStructs(t *structs.InferenceGatewayMetrics, s *InferenceGatewayMetrics) {
+	if s == nil {
+		return
+	}
+	s.Enabled = boolValueFromPointerToBool(t.Enabled)
+	if t.Prometheus != nil {
+		var x InferenceGatewayMetricsPrometheus
+		InferenceGatewayMetricsPrometheusFromStructs(t.Prometheus, &x)
+		s.Prometheus = &x
+	}
+	if t.OTLP != nil {
+		var x InferenceGatewayOTLPExport
+		InferenceGatewayOTLPExportFromStructs(t.OTLP, &x)
+		s.OTLP = &x
+	}
+}
+func InferenceGatewayMetricsPrometheusToStructs(s *InferenceGatewayMetricsPrometheus, t *structs.InferenceGatewayMetricsPrometheus) {
+	if s == nil {
+		return
+	}
+	t.Port = pointerToIntFromInt32Value(s.Port)
+}
+func InferenceGatewayMetricsPrometheusFromStructs(t *structs.InferenceGatewayMetricsPrometheus, s *InferenceGatewayMetricsPrometheus) {
+	if s == nil {
+		return
+	}
+	s.Port = int32ValueFromPointerToInt(t.Port)
+}
+func InferenceGatewayOTLPExportToStructs(s *InferenceGatewayOTLPExport, t *structs.InferenceGatewayOTLPExport) {
+	if s == nil {
+		return
+	}
+	t.Endpoint = s.Endpoint
+	t.Insecure = s.Insecure
+}
+func InferenceGatewayOTLPExportFromStructs(t *structs.InferenceGatewayOTLPExport, s *InferenceGatewayOTLPExport) {
+	if s == nil {
+		return
+	}
+	s.Endpoint = t.Endpoint
+	s.Insecure = t.Insecure
+}
+func InferenceGatewayObservabilityToStructs(s *InferenceGatewayObservability, t *structs.InferenceGatewayObservability) {
+	if s == nil {
+		return
+	}
+	if s.Metrics != nil {
+		var x structs.InferenceGatewayMetrics
+		InferenceGatewayMetricsToStructs(s.Metrics, &x)
+		t.Metrics = &x
+	}
+	if s.Tracing != nil {
+		var x structs.InferenceGatewayTracing
+		InferenceGatewayTracingToStructs(s.Tracing, &x)
+		t.Tracing = &x
+	}
+}
+func InferenceGatewayObservabilityFromStructs(t *structs.InferenceGatewayObservability, s *InferenceGatewayObservability) {
+	if s == nil {
+		return
+	}
+	if t.Metrics != nil {
+		var x InferenceGatewayMetrics
+		InferenceGatewayMetricsFromStructs(t.Metrics, &x)
+		s.Metrics = &x
+	}
+	if t.Tracing != nil {
+		var x InferenceGatewayTracing
+		InferenceGatewayTracingFromStructs(t.Tracing, &x)
+		s.Tracing = &x
+	}
+}
+func InferenceGatewayPIIToStructs(s *InferenceGatewayPII, t *structs.InferenceGatewayPII) {
+	if s == nil {
+		return
+	}
+	t.Scope = inferenceGatewayPIIScopeToStructs(s.Scope)
+	t.DefaultAction = inferenceGatewayPIIActionToStructs(s.DefaultAction)
+	t.StreamHoldbackBytes = int(s.StreamHoldbackBytes)
+	if s.Mask != nil {
+		var x structs.InferenceGatewayPIIMask
+		InferenceGatewayPIIMaskToStructs(s.Mask, &x)
+		t.Mask = &x
+	}
+	{
+		t.Detectors = make([]structs.InferenceGatewayPIIDetector, len(s.Detectors))
+		for i := range s.Detectors {
+			if s.Detectors[i] != nil {
+				InferenceGatewayPIIDetectorToStructs(s.Detectors[i], &t.Detectors[i])
+			}
+		}
+	}
+}
+func InferenceGatewayPIIFromStructs(t *structs.InferenceGatewayPII, s *InferenceGatewayPII) {
+	if s == nil {
+		return
+	}
+	s.Scope = inferenceGatewayPIIScopeFromStructs(t.Scope)
+	s.DefaultAction = inferenceGatewayPIIActionFromStructs(t.DefaultAction)
+	s.StreamHoldbackBytes = int32(t.StreamHoldbackBytes)
+	if t.Mask != nil {
+		var x InferenceGatewayPIIMask
+		InferenceGatewayPIIMaskFromStructs(t.Mask, &x)
+		s.Mask = &x
+	}
+	{
+		s.Detectors = make([]*InferenceGatewayPIIDetector, len(t.Detectors))
+		for i := range t.Detectors {
+			{
+				var x InferenceGatewayPIIDetector
+				InferenceGatewayPIIDetectorFromStructs(&t.Detectors[i], &x)
+				s.Detectors[i] = &x
+			}
+		}
+	}
+}
+func InferenceGatewayPIIDetectorToStructs(s *InferenceGatewayPIIDetector, t *structs.InferenceGatewayPIIDetector) {
+	if s == nil {
+		return
+	}
+	t.Name = s.Name
+	t.Regex = s.Regex
+	t.Action = inferenceGatewayPIIActionToStructs(s.Action)
+}
+func InferenceGatewayPIIDetectorFromStructs(t *structs.InferenceGatewayPIIDetector, s *InferenceGatewayPIIDetector) {
+	if s == nil {
+		return
+	}
+	s.Name = t.Name
+	s.Regex = t.Regex
+	s.Action = inferenceGatewayPIIActionFromStructs(t.Action)
+}
+func InferenceGatewayPIIMaskToStructs(s *InferenceGatewayPIIMask, t *structs.InferenceGatewayPIIMask) {
+	if s == nil {
+		return
+	}
+	t.Char = s.Char
+	t.KeepLast = int(s.KeepLast)
+}
+func InferenceGatewayPIIMaskFromStructs(t *structs.InferenceGatewayPIIMask, s *InferenceGatewayPIIMask) {
+	if s == nil {
+		return
+	}
+	s.Char = t.Char
+	s.KeepLast = int32(t.KeepLast)
+}
+func InferenceGatewayProcessorToStructs(s *InferenceGatewayProcessor, t *structs.InferenceGatewayProcessor) {
+	if s == nil {
+		return
+	}
+	t.FailureMode = s.FailureMode
+	t.BodyModelRouting = s.BodyModelRouting
+}
+func InferenceGatewayProcessorFromStructs(t *structs.InferenceGatewayProcessor, s *InferenceGatewayProcessor) {
+	if s == nil {
+		return
+	}
+	s.FailureMode = t.FailureMode
+	s.BodyModelRouting = t.BodyModelRouting
+}
+func InferenceGatewayTracingToStructs(s *InferenceGatewayTracing, t *structs.InferenceGatewayTracing) {
+	if s == nil {
+		return
+	}
+	t.Enabled = s.Enabled
+	if s.OTLP != nil {
+		var x structs.InferenceGatewayOTLPExport
+		InferenceGatewayOTLPExportToStructs(s.OTLP, &x)
+		t.OTLP = &x
+	}
+	t.SampleRatio = s.SampleRatio
+}
+func InferenceGatewayTracingFromStructs(t *structs.InferenceGatewayTracing, s *InferenceGatewayTracing) {
+	if s == nil {
+		return
+	}
+	s.Enabled = t.Enabled
+	if t.OTLP != nil {
+		var x InferenceGatewayOTLPExport
+		InferenceGatewayOTLPExportFromStructs(t.OTLP, &x)
+		s.OTLP = &x
+	}
+	s.SampleRatio = t.SampleRatio
 }
 func IngressGatewayToStructs(s *IngressGateway, t *structs.IngressGatewayConfigEntry) {
 	if s == nil {
@@ -1642,6 +2174,40 @@ func LeastRequestConfigFromStructs(t *structs.LeastRequestConfig, s *LeastReques
 	}
 	s.ChoiceCount = t.ChoiceCount
 }
+func LinkedServiceToStructs(s *LinkedService, t *structs.LinkedService) {
+	if s == nil {
+		return
+	}
+	t.Name = s.Name
+	t.CAFile = s.CAFile
+	t.CertFile = s.CertFile
+	t.KeyFile = s.KeyFile
+	t.SNI = s.SNI
+	t.DisableAutoHostRewrite = s.DisableAutoHostRewrite
+	if s.Credential != nil {
+		var x structs.GatewayServiceCredential
+		GatewayServiceCredentialToStructs(s.Credential, &x)
+		t.Credential = &x
+	}
+	t.EnterpriseMeta = enterpriseMetaToStructs(s.EnterpriseMeta)
+}
+func LinkedServiceFromStructs(t *structs.LinkedService, s *LinkedService) {
+	if s == nil {
+		return
+	}
+	s.Name = t.Name
+	s.CAFile = t.CAFile
+	s.CertFile = t.CertFile
+	s.KeyFile = t.KeyFile
+	s.SNI = t.SNI
+	s.DisableAutoHostRewrite = t.DisableAutoHostRewrite
+	if t.Credential != nil {
+		var x GatewayServiceCredential
+		GatewayServiceCredentialFromStructs(t.Credential, &x)
+		s.Credential = &x
+	}
+	s.EnterpriseMeta = enterpriseMetaFromStructs(t.EnterpriseMeta)
+}
 func LoadBalancerToStructs(s *LoadBalancer, t *structs.LoadBalancer) {
 	if s == nil {
 		return
@@ -1789,6 +2355,7 @@ func MeshDirectionalTLSConfigToStructs(s *MeshDirectionalTLSConfig, t *structs.M
 	t.TLSMinVersion = tlsVersionToStructs(s.TLSMinVersion)
 	t.TLSMaxVersion = tlsVersionToStructs(s.TLSMaxVersion)
 	t.CipherSuites = cipherSuitesToStructs(s.CipherSuites)
+	t.ECDHCurves = s.ECDHCurves
 }
 func MeshDirectionalTLSConfigFromStructs(t *structs.MeshDirectionalTLSConfig, s *MeshDirectionalTLSConfig) {
 	if s == nil {
@@ -1797,6 +2364,7 @@ func MeshDirectionalTLSConfigFromStructs(t *structs.MeshDirectionalTLSConfig, s 
 	s.TLSMinVersion = tlsVersionFromStructs(t.TLSMinVersion)
 	s.TLSMaxVersion = tlsVersionFromStructs(t.TLSMaxVersion)
 	s.CipherSuites = cipherSuitesFromStructs(t.CipherSuites)
+	s.ECDHCurves = t.ECDHCurves
 }
 func MeshGatewayConfigToStructs(s *MeshGatewayConfig, t *structs.MeshGatewayConfig) {
 	if s == nil {
@@ -1869,6 +2437,9 @@ func PassiveHealthCheckToStructs(s *PassiveHealthCheck, t *structs.PassiveHealth
 	t.Interval = structs.DurationFromProto(s.Interval)
 	t.MaxFailures = s.MaxFailures
 	t.EnforcingConsecutive5xx = pointerToUint32FromUint32(s.EnforcingConsecutive5Xx)
+	t.EnforcingConsecutiveGatewayFailure = pointerToUint32FromUint32(s.EnforcingConsecutiveGatewayFailure)
+	t.Consecutive5xx = pointerToUint32FromUint32(s.Consecutive5Xx)
+	t.ConsecutiveGatewayFailure = pointerToUint32FromUint32(s.ConsecutiveGatewayFailure)
 	t.MaxEjectionPercent = pointerToUint32FromUint32(s.MaxEjectionPercent)
 	t.BaseEjectionTime = structs.DurationPointerFromProto(s.BaseEjectionTime)
 }
@@ -1879,6 +2450,9 @@ func PassiveHealthCheckFromStructs(t *structs.PassiveHealthCheck, s *PassiveHeal
 	s.Interval = structs.DurationToProto(t.Interval)
 	s.MaxFailures = t.MaxFailures
 	s.EnforcingConsecutive5Xx = uint32FromPointerToUint32(t.EnforcingConsecutive5xx)
+	s.EnforcingConsecutiveGatewayFailure = uint32FromPointerToUint32(t.EnforcingConsecutiveGatewayFailure)
+	s.Consecutive5Xx = uint32FromPointerToUint32(t.Consecutive5xx)
+	s.ConsecutiveGatewayFailure = uint32FromPointerToUint32(t.ConsecutiveGatewayFailure)
 	s.MaxEjectionPercent = uint32FromPointerToUint32(t.MaxEjectionPercent)
 	s.BaseEjectionTime = structs.DurationPointerToProto(t.BaseEjectionTime)
 }
@@ -2127,6 +2701,7 @@ func ServiceDefaultsToStructs(s *ServiceDefaults, t *structs.ServiceConfigEntry)
 	t.EnvoyExtensions = EnvoyExtensionsToStructs(s.EnvoyExtensions)
 	t.Meta = s.Meta
 	t.Hash = s.Hash
+	t.MaxRequestHeadersKB = s.MaxRequestHeadersKB
 }
 func ServiceDefaultsFromStructs(t *structs.ServiceConfigEntry, s *ServiceDefaults) {
 	if s == nil {
@@ -2173,6 +2748,7 @@ func ServiceDefaultsFromStructs(t *structs.ServiceConfigEntry, s *ServiceDefault
 	s.EnvoyExtensions = EnvoyExtensionsFromStructs(t.EnvoyExtensions)
 	s.Meta = t.Meta
 	s.Hash = t.Hash
+	s.MaxRequestHeadersKB = t.MaxRequestHeadersKB
 }
 func ServiceIntentionsToStructs(s *ServiceIntentions, t *structs.ServiceIntentionsConfigEntry) {
 	if s == nil {
@@ -2591,6 +3167,16 @@ func TCPServiceToStructs(s *TCPService, t *structs.TCPService) {
 		return
 	}
 	t.Name = s.Name
+	if s.TLS != nil {
+		var x structs.GatewayServiceTLSConfig
+		GatewayServiceTLSConfigToStructs(s.TLS, &x)
+		t.TLS = &x
+	}
+	if s.Limits != nil {
+		var x structs.UpstreamLimits
+		UpstreamLimitsToStructs(s.Limits, &x)
+		t.Limits = &x
+	}
 	t.EnterpriseMeta = enterpriseMetaToStructs(s.EnterpriseMeta)
 }
 func TCPServiceFromStructs(t *structs.TCPService, s *TCPService) {
@@ -2598,7 +3184,59 @@ func TCPServiceFromStructs(t *structs.TCPService, s *TCPService) {
 		return
 	}
 	s.Name = t.Name
+	if t.TLS != nil {
+		var x GatewayServiceTLSConfig
+		GatewayServiceTLSConfigFromStructs(t.TLS, &x)
+		s.TLS = &x
+	}
+	if t.Limits != nil {
+		var x UpstreamLimits
+		UpstreamLimitsFromStructs(t.Limits, &x)
+		s.Limits = &x
+	}
 	s.EnterpriseMeta = enterpriseMetaFromStructs(t.EnterpriseMeta)
+}
+func TerminatingGatewayToStructs(s *TerminatingGateway, t *structs.TerminatingGatewayConfigEntry) {
+	if s == nil {
+		return
+	}
+	{
+		t.Services = make([]structs.LinkedService, len(s.Services))
+		for i := range s.Services {
+			if s.Services[i] != nil {
+				LinkedServiceToStructs(s.Services[i], &t.Services[i])
+			}
+		}
+	}
+	if s.CredentialInjection != nil {
+		var x structs.GatewayCredentialInjection
+		GatewayCredentialInjectionToStructs(s.CredentialInjection, &x)
+		t.CredentialInjection = &x
+	}
+	t.Meta = s.Meta
+	t.Hash = s.Hash
+}
+func TerminatingGatewayFromStructs(t *structs.TerminatingGatewayConfigEntry, s *TerminatingGateway) {
+	if s == nil {
+		return
+	}
+	{
+		s.Services = make([]*LinkedService, len(t.Services))
+		for i := range t.Services {
+			{
+				var x LinkedService
+				LinkedServiceFromStructs(&t.Services[i], &x)
+				s.Services[i] = &x
+			}
+		}
+	}
+	if t.CredentialInjection != nil {
+		var x GatewayCredentialInjection
+		GatewayCredentialInjectionFromStructs(t.CredentialInjection, &x)
+		s.CredentialInjection = &x
+	}
+	s.Meta = t.Meta
+	s.Hash = t.Hash
 }
 func TimeoutFilterToStructs(s *TimeoutFilter, t *structs.TimeoutFilter) {
 	if s == nil {
@@ -2753,6 +3391,11 @@ func UpstreamLimitsToStructs(s *UpstreamLimits, t *structs.UpstreamLimits) {
 	t.MaxConnections = pointerToIntFromInt32(s.MaxConnections)
 	t.MaxPendingRequests = pointerToIntFromInt32(s.MaxPendingRequests)
 	t.MaxConcurrentRequests = pointerToIntFromInt32(s.MaxConcurrentRequests)
+	if s.PassiveHealthCheck != nil {
+		var x structs.PassiveHealthCheck
+		PassiveHealthCheckToStructs(s.PassiveHealthCheck, &x)
+		t.PassiveHealthCheck = &x
+	}
 }
 func UpstreamLimitsFromStructs(t *structs.UpstreamLimits, s *UpstreamLimits) {
 	if s == nil {
@@ -2761,4 +3404,9 @@ func UpstreamLimitsFromStructs(t *structs.UpstreamLimits, s *UpstreamLimits) {
 	s.MaxConnections = int32FromPointerToInt(t.MaxConnections)
 	s.MaxPendingRequests = int32FromPointerToInt(t.MaxPendingRequests)
 	s.MaxConcurrentRequests = int32FromPointerToInt(t.MaxConcurrentRequests)
+	if t.PassiveHealthCheck != nil {
+		var x PassiveHealthCheck
+		PassiveHealthCheckFromStructs(t.PassiveHealthCheck, &x)
+		s.PassiveHealthCheck = &x
+	}
 }

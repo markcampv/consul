@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package agent
@@ -199,6 +199,40 @@ func TestProtectDataDir(t *testing.T) {
 	}
 }
 
+func TestProtectDataDirWithTokenDir(t *testing.T) {
+	t.Parallel()
+	dir := testutil.TempDir(t, "consul")
+	token_dirs := "/var/run/secrets/kubernetes.io/serviceaccount,/run/secrets/kubernetes.io/serviceaccount"
+
+	if err := os.MkdirAll(filepath.Join(dir, "mdb"), 0700); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	cfgDir := testutil.TempDir(t, "consul-config")
+
+	cfgFilePath := filepath.Join(cfgDir, "consul.json")
+	cfgFile, err := os.Create(cfgFilePath)
+	if err != nil {
+		t.Fatalf("Unable to create file %v, got error:%v", cfgFilePath, err)
+	}
+
+	content := fmt.Sprintf(`{"server": true, "bind_addr" : "10.0.0.1", "data_dir": "%s", "token_dirs": "%s"}`, dir, token_dirs)
+	_, err = cfgFile.Write([]byte(content))
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	ui := newCaptureUI()
+	cmd := New(ui)
+	args := []string{"-config-file=" + cfgFile.Name()}
+	if code := cmd.Run(args); code == 0 {
+		t.Fatalf("should fail")
+	}
+	if out := ui.ErrorWriter.String(); !strings.Contains(out, dir) {
+		t.Fatalf("expected mdb dir error, got: %s", out)
+	}
+}
+
 func TestBadDataDirPermissions(t *testing.T) {
 	t.Parallel()
 	dir := testutil.TempDir(t, "consul")
@@ -223,11 +257,11 @@ type captureUI struct {
 }
 
 func (c *captureUI) Stdout() io.Writer {
-	return c.MockUi.OutputWriter
+	return c.OutputWriter
 }
 
 func (c *captureUI) Stderr() io.Writer {
-	return c.MockUi.ErrorWriter
+	return c.ErrorWriter
 }
 
 func (c *captureUI) HeaderOutput(s string) {

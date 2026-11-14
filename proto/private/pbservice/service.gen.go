@@ -4,6 +4,186 @@ package pbservice
 
 import "github.com/hashicorp/consul/agent/structs"
 
+func AIAgentToStructs(s *AIAgent, t *structs.AIAgent) {
+	if s == nil {
+		return
+	}
+	if s.Inference != nil {
+		var x structs.AIAgentInference
+		AIAgentInferenceToStructs(s.Inference, &x)
+		t.Inference = &x
+	}
+	if s.MCP != nil {
+		var x structs.AIAgentMCP
+		AIAgentMCPToStructs(s.MCP, &x)
+		t.MCP = &x
+	}
+	if s.RateLimits != nil {
+		var x structs.AIAgentRateLimits
+		AIAgentRateLimitsToStructs(s.RateLimits, &x)
+		t.RateLimits = &x
+	}
+	if s.Interceptor != nil {
+		var x structs.AIAgentInterceptor
+		AIAgentInterceptorToStructs(s.Interceptor, &x)
+		t.Interceptor = &x
+	}
+}
+func AIAgentFromStructs(t *structs.AIAgent, s *AIAgent) {
+	if s == nil {
+		return
+	}
+	if t.Inference != nil {
+		var x AIAgentInference
+		AIAgentInferenceFromStructs(t.Inference, &x)
+		s.Inference = &x
+	}
+	if t.MCP != nil {
+		var x AIAgentMCP
+		AIAgentMCPFromStructs(t.MCP, &x)
+		s.MCP = &x
+	}
+	if t.RateLimits != nil {
+		var x AIAgentRateLimits
+		AIAgentRateLimitsFromStructs(t.RateLimits, &x)
+		s.RateLimits = &x
+	}
+	if t.Interceptor != nil {
+		var x AIAgentInterceptor
+		AIAgentInterceptorFromStructs(t.Interceptor, &x)
+		s.Interceptor = &x
+	}
+}
+func AIAgentInferenceToStructs(s *AIAgentInference, t *structs.AIAgentInference) {
+	if s == nil {
+		return
+	}
+	t.Specialization = s.Specialization
+	t.Vendor = s.Vendor
+}
+func AIAgentInferenceFromStructs(t *structs.AIAgentInference, s *AIAgentInference) {
+	if s == nil {
+		return
+	}
+	s.Specialization = t.Specialization
+	s.Vendor = t.Vendor
+}
+func AIAgentInterceptorToStructs(s *AIAgentInterceptor, t *structs.AIAgentInterceptor) {
+	if s == nil {
+		return
+	}
+	t.Port = int(s.Port)
+}
+func AIAgentInterceptorFromStructs(t *structs.AIAgentInterceptor, s *AIAgentInterceptor) {
+	if s == nil {
+		return
+	}
+	s.Port = int32(t.Port)
+}
+func AIAgentMCPToStructs(s *AIAgentMCP, t *structs.AIAgentMCP) {
+	if s == nil {
+		return
+	}
+	t.Port = int(s.Port)
+	if s.HITL != nil {
+		var x structs.AIAgentMCPHITL
+		AIAgentMCPHITLToStructs(s.HITL, &x)
+		t.HITL = &x
+	}
+}
+func AIAgentMCPFromStructs(t *structs.AIAgentMCP, s *AIAgentMCP) {
+	if s == nil {
+		return
+	}
+	s.Port = int32(t.Port)
+	if t.HITL != nil {
+		var x AIAgentMCPHITL
+		AIAgentMCPHITLFromStructs(t.HITL, &x)
+		s.HITL = &x
+	}
+}
+func AIAgentMCPHITLToStructs(s *AIAgentMCPHITL, t *structs.AIAgentMCPHITL) {
+	if s == nil {
+		return
+	}
+	t.Port = int(s.Port)
+	t.ApprovalTimeout = s.ApprovalTimeout
+}
+func AIAgentMCPHITLFromStructs(t *structs.AIAgentMCPHITL, s *AIAgentMCPHITL) {
+	if s == nil {
+		return
+	}
+	s.Port = int32(t.Port)
+	s.ApprovalTimeout = t.ApprovalTimeout
+}
+func AIAgentRateLimitsToStructs(s *AIAgentRateLimits, t *structs.AIAgentRateLimits) {
+	if s == nil {
+		return
+	}
+	t.ToolCallsPerMinute = int(s.ToolCallsPerMinute)
+	t.ToolCallsPerHour = int(s.ToolCallsPerHour)
+}
+func AIAgentRateLimitsFromStructs(t *structs.AIAgentRateLimits, s *AIAgentRateLimits) {
+	if s == nil {
+		return
+	}
+	s.ToolCallsPerMinute = int32(t.ToolCallsPerMinute)
+	s.ToolCallsPerHour = int32(t.ToolCallsPerHour)
+}
+func AIInferenceModelToStructs(s *AIInferenceModel, t *structs.AIInferenceModel) {
+	if s == nil {
+		return
+	}
+	t.Protocol = s.Protocol
+	t.Path = s.Path
+	if s.Defaults != nil {
+		var x structs.AIModelDefaults
+		AIModelDefaultsToStructs(s.Defaults, &x)
+		t.Defaults = &x
+	}
+}
+func AIInferenceModelFromStructs(t *structs.AIInferenceModel, s *AIInferenceModel) {
+	if s == nil {
+		return
+	}
+	s.Protocol = t.Protocol
+	s.Path = t.Path
+	if t.Defaults != nil {
+		var x AIModelDefaults
+		AIModelDefaultsFromStructs(t.Defaults, &x)
+		s.Defaults = &x
+	}
+}
+func AIMCPServerToStructs(s *AIMCPServer, t *structs.AIMCPServer) {
+	if s == nil {
+		return
+	}
+	t.Transport = s.Transport
+	t.Path = s.Path
+	t.ProtocolVersion = s.ProtocolVersion
+}
+func AIMCPServerFromStructs(t *structs.AIMCPServer, s *AIMCPServer) {
+	if s == nil {
+		return
+	}
+	s.Transport = t.Transport
+	s.Path = t.Path
+	s.ProtocolVersion = t.ProtocolVersion
+}
+func AIModelDefaultsToStructs(s *AIModelDefaults, t *structs.AIModelDefaults) {
+	if s == nil {
+		return
+	}
+	t.MaxTokens = int(s.MaxTokens)
+	t.Temperature = s.Temperature
+}
+func AIModelDefaultsFromStructs(t *structs.AIModelDefaults, s *AIModelDefaults) {
+	if s == nil {
+		return
+	}
+	s.MaxTokens = int32(t.MaxTokens)
+	s.Temperature = t.Temperature
+}
 func AccessLogsConfigToStructs(s *AccessLogsConfig, t *structs.AccessLogsConfig) {
 	if s == nil {
 		return
@@ -35,6 +215,7 @@ func ConnectProxyConfigToStructs(s *ConnectProxyConfig, t *structs.ConnectProxyC
 	t.DestinationServiceID = s.DestinationServiceID
 	t.LocalServiceAddress = s.LocalServiceAddress
 	t.LocalServicePort = int(s.LocalServicePort)
+	t.LocalServicePorts = PortsToStructs(s.LocalServicePorts)
 	t.LocalServiceSocketPath = s.LocalServiceSocketPath
 	t.Mode = structs.ProxyMode(s.Mode)
 	t.Config = ProtobufTypesStructToMapStringInterface(s.Config)
@@ -61,6 +242,7 @@ func ConnectProxyConfigFromStructs(t *structs.ConnectProxyConfig, s *ConnectProx
 	s.DestinationServiceID = t.DestinationServiceID
 	s.LocalServiceAddress = t.LocalServiceAddress
 	s.LocalServicePort = int32(t.LocalServicePort)
+	s.LocalServicePorts = NewPortsFromStructs(t.LocalServicePorts)
 	s.LocalServiceSocketPath = t.LocalServiceSocketPath
 	s.Mode = string(t.Mode)
 	s.Config = MapStringInterfaceToProtobufTypesStruct(t.Config)
@@ -148,6 +330,48 @@ func PeeringServiceMetaFromStructs(t *structs.PeeringServiceMeta, s *PeeringServ
 	s.SpiffeID = t.SpiffeID
 	s.Protocol = t.Protocol
 }
+func ServiceAIToStructs(s *ServiceAI, t *structs.ServiceAI) {
+	if s == nil {
+		return
+	}
+	t.Role = structs.ServiceAIRole(s.Role)
+	if s.InferenceModel != nil {
+		var x structs.AIInferenceModel
+		AIInferenceModelToStructs(s.InferenceModel, &x)
+		t.InferenceModel = &x
+	}
+	if s.MCPServer != nil {
+		var x structs.AIMCPServer
+		AIMCPServerToStructs(s.MCPServer, &x)
+		t.MCPServer = &x
+	}
+	if s.Agent != nil {
+		var x structs.AIAgent
+		AIAgentToStructs(s.Agent, &x)
+		t.Agent = &x
+	}
+}
+func ServiceAIFromStructs(t *structs.ServiceAI, s *ServiceAI) {
+	if s == nil {
+		return
+	}
+	s.Role = string(t.Role)
+	if t.InferenceModel != nil {
+		var x AIInferenceModel
+		AIInferenceModelFromStructs(t.InferenceModel, &x)
+		s.InferenceModel = &x
+	}
+	if t.MCPServer != nil {
+		var x AIMCPServer
+		AIMCPServerFromStructs(t.MCPServer, &x)
+		s.MCPServer = &x
+	}
+	if t.Agent != nil {
+		var x AIAgent
+		AIAgentFromStructs(t.Agent, &x)
+		s.Agent = &x
+	}
+}
 func ServiceConnectToStructs(s *ServiceConnect, t *structs.ServiceConnect) {
 	if s == nil {
 		return
@@ -184,6 +408,7 @@ func ServiceDefinitionToStructs(s *ServiceDefinition, t *structs.ServiceDefiniti
 	t.TaggedAddresses = MapStringServiceAddressToStructs(s.TaggedAddresses)
 	t.Meta = s.Meta
 	t.Port = int(s.Port)
+	t.Ports = PortsToStructs(s.Ports)
 	t.SocketPath = s.SocketPath
 	if s.Check != nil {
 		CheckTypeToStructs(s.Check, &t.Check)
@@ -196,6 +421,7 @@ func ServiceDefinitionToStructs(s *ServiceDefinition, t *structs.ServiceDefiniti
 	t.Proxy = ConnectProxyConfigPtrToStructs(s.Proxy)
 	t.EnterpriseMeta = EnterpriseMetaToStructs(s.EnterpriseMeta)
 	t.Connect = ServiceConnectPtrToStructs(s.Connect)
+	t.AI = ServiceAIPtrToStructs(s.AI)
 }
 func ServiceDefinitionFromStructs(t *structs.ServiceDefinition, s *ServiceDefinition) {
 	if s == nil {
@@ -209,6 +435,7 @@ func ServiceDefinitionFromStructs(t *structs.ServiceDefinition, s *ServiceDefini
 	s.TaggedAddresses = NewMapStringServiceAddressFromStructs(t.TaggedAddresses)
 	s.Meta = t.Meta
 	s.Port = int32(t.Port)
+	s.Ports = NewPortsFromStructs(t.Ports)
 	s.SocketPath = t.SocketPath
 	{
 		var x CheckType
@@ -223,6 +450,23 @@ func ServiceDefinitionFromStructs(t *structs.ServiceDefinition, s *ServiceDefini
 	s.Proxy = NewConnectProxyConfigPtrFromStructs(t.Proxy)
 	s.EnterpriseMeta = NewEnterpriseMetaFromStructs(t.EnterpriseMeta)
 	s.Connect = NewServiceConnectPtrFromStructs(t.Connect)
+	s.AI = NewServiceAIPtrFromStructs(t.AI)
+}
+func ServicePortToStructs(s *ServicePort, t *structs.ServicePort) {
+	if s == nil {
+		return
+	}
+	t.Name = s.Name
+	t.Port = int(s.Port)
+	t.Default = s.Default
+}
+func ServicePortFromStructs(t *structs.ServicePort, s *ServicePort) {
+	if s == nil {
+		return
+	}
+	s.Name = t.Name
+	s.Port = int32(t.Port)
+	s.Default = t.Default
 }
 func TransparentProxyConfigToStructs(s *TransparentProxyConfig, t *structs.TransparentProxyConfig) {
 	if s == nil {
@@ -247,6 +491,7 @@ func UpstreamToStructs(s *Upstream, t *structs.Upstream) {
 	t.DestinationPartition = s.DestinationPartition
 	t.DestinationPeer = s.DestinationPeer
 	t.DestinationName = s.DestinationName
+	t.DestinationPort = s.DestinationPort
 	t.Datacenter = s.Datacenter
 	t.LocalBindAddress = s.LocalBindAddress
 	t.LocalBindPort = int(s.LocalBindPort)
@@ -267,6 +512,7 @@ func UpstreamFromStructs(t *structs.Upstream, s *Upstream) {
 	s.DestinationPartition = t.DestinationPartition
 	s.DestinationPeer = t.DestinationPeer
 	s.DestinationName = t.DestinationName
+	s.DestinationPort = t.DestinationPort
 	s.Datacenter = t.Datacenter
 	s.LocalBindAddress = t.LocalBindAddress
 	s.LocalBindPort = int32(t.LocalBindPort)

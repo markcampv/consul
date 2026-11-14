@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package catalog
@@ -533,7 +533,7 @@ type mockSession struct {
 
 func newMockSession(t *testing.T) *mockSession {
 	m := &mockSession{}
-	m.Mock.Test(t)
+	m.Test(t)
 
 	t.Cleanup(func() { m.AssertExpectations(t) })
 

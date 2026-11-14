@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package xds
@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,9 +15,14 @@ import (
 
 	envoy_core_v3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	envoy_route_v3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
+	prevpriorities "github.com/envoyproxy/go-control-plane/envoy/extensions/retry/priority/previous_priorities/v3"
 	envoy_matcher_v3 "github.com/envoyproxy/go-control-plane/envoy/type/matcher/v3"
 	"golang.org/x/exp/maps"
 	"golang.org/x/exp/slices"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/hashicorp/consul/agent/connect"
 	"github.com/hashicorp/consul/agent/consul/discoverychain"
@@ -24,9 +30,6 @@ import (
 	"github.com/hashicorp/consul/agent/structs"
 	"github.com/hashicorp/consul/agent/xds/config"
 	"github.com/hashicorp/consul/agent/xds/response"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/durationpb"
-	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 // routesFromSnapshot returns the xDS API representation of the "routes" in the
@@ -66,6 +69,8 @@ func (s *ResourceGenerator) routesForConnectProxy(cfgSnap *proxycfg.ConfigSnapsh
 	var resources []proto.Message
 	validateClusters := meshValidateClusters(cfgSnap)
 	for uid, chain := range cfgSnap.ConnectProxy.DiscoveryChain {
+		upstream, _ := cfgSnap.ConnectProxy.GetUpstream(uid, &cfgSnap.ProxyID.EnterpriseMeta)
+		chain = discoveryChainForPortQualifiedUpstream(cfgSnap, uid, upstream, chain)
 		if chain.Default {
 			continue
 		}
@@ -253,6 +258,10 @@ func (s *ResourceGenerator) makeRoutes(
 	return resources, nil
 }
 
+// routesForMeshGateway emits RDS resources for HTTP-like compiled discovery
+// chains. The corresponding mesh-gateway listener filter chain references the
+// same UpstreamID-based route name; enterprise helpers add matching
+// port-qualified resources where needed.
 func (s *ResourceGenerator) routesForMeshGateway(cfgSnap *proxycfg.ConfigSnapshot) ([]proto.Message, error) {
 	if cfgSnap == nil {
 		return nil, errors.New("nil config given")
@@ -291,6 +300,11 @@ func (s *ResourceGenerator) routesForMeshGateway(cfgSnap *proxycfg.ConfigSnapsho
 			route.ValidateClusters = response.MakeBoolValue(true)
 		}
 		resources = append(resources, route)
+
+		resources, err = s.appendEntMeshGatewayPeeredMultiportRoutes(resources, cfgSnap, svc, chain, route)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return resources, nil
@@ -464,7 +478,7 @@ func (s *ResourceGenerator) routesForAPIGateway(cfgSnap *proxycfg.ConfigSnapshot
 			continue
 		}
 		// Do not create any route configuration for TCP listeners
-		if readyListener.listenerCfg.Protocol != structs.ListenerProtocolHTTP {
+		if !structs.IsProtocolHTTPLike(string(readyListener.listenerCfg.Protocol)) {
 			continue
 		}
 
@@ -502,7 +516,12 @@ func (s *ResourceGenerator) routesForAPIGateway(cfgSnap *proxycfg.ConfigSnapshot
 			consolidatedRoute := consolidatedRoute // Reassignment to avoid closure issues with the loop variable.
 			domains := generateUpstreamAPIsDomains(readyListener.listenerKey, upstream, consolidatedRoute.Hostnames)
 
-			filterBuilder := perRouteFilterBuilder{providerMap: cfgSnap.JWTProviders, listener: &readyListener.listenerCfg, route: &consolidatedRoute}
+			filterBuilder := perRouteFilterBuilder{
+				providerMap:            cfgSnap.JWTProviders,
+				listener:               &readyListener.listenerCfg,
+				route:                  &consolidatedRoute,
+				gatewayExtAuthzEnabled: cfgSnap.APIGateway.GatewayConfig.ExtAuthzEnabled(),
+			}
 			virtualHost, err := s.makeUpstreamRouteForDiscoveryChain(cfgSnap, uid, chain, domains, false, filterBuilder)
 			if err != nil {
 				return nil, err
@@ -654,6 +673,18 @@ func (s *ResourceGenerator) makeUpstreamRouteForDiscoveryChain(
 		return nil, err
 	}
 
+	// Get the upstream config for this service to support failover logic
+	var upstreamConfigMap map[string]interface{}
+	upstream, skip := cfgSnap.ConnectProxy.GetUpstream(uid, &cfgSnap.ProxyID.EnterpriseMeta)
+	if !skip && upstream != nil {
+		upstreamConfigMap = upstream.Config
+	}
+	destinationPort := destinationPortForDiscoveryChain(cfgSnap, uid, upstream, chain)
+	rawUpstreamConfig, err := structs.ParseUpstreamConfigNoDefaults(upstreamConfigMap)
+	if err != nil {
+		return nil, err
+	}
+
 	switch startNode.Type {
 	case structs.DiscoveryGraphNodeTypeRouter:
 		routes = make([]*envoy_route_v3.Route, 0, len(startNode.Routes))
@@ -665,6 +696,7 @@ func (s *ResourceGenerator) makeUpstreamRouteForDiscoveryChain(
 			var (
 				routeAction *envoy_route_v3.Route_Route
 				err         error
+				isAggregate bool
 			)
 
 			nextNode := chain.Nodes[discoveryRoute.NextNode]
@@ -676,13 +708,15 @@ func (s *ResourceGenerator) makeUpstreamRouteForDiscoveryChain(
 
 			switch nextNode.Type {
 			case structs.DiscoveryGraphNodeTypeSplitter:
-				routeAction, err = s.makeRouteActionForSplitter(upstreamsSnapshot, nextNode.Splits, chain, forMeshGateway)
+				ra, agg, err := s.makeRouteActionForSplitterWithFailover(cfgSnap, uid, upstreamsSnapshot, nextNode.Splits, chain, rawUpstreamConfig, forMeshGateway, destinationPort)
 				if err != nil {
 					return nil, err
 				}
+				routeAction = ra
+				isAggregate = agg
 
 			case structs.DiscoveryGraphNodeTypeResolver:
-				ra, ok := s.makeRouteActionForChainCluster(upstreamsSnapshot, nextNode.Resolver.Target, chain, forMeshGateway)
+				ra, ok := s.makeRouteActionForChainCluster(upstreamsSnapshot, nextNode.Resolver.Target, chain, forMeshGateway, destinationPort)
 				if !ok {
 					continue
 				}
@@ -703,8 +737,13 @@ func (s *ResourceGenerator) makeUpstreamRouteForDiscoveryChain(
 			route := &envoy_route_v3.Route{}
 
 			if destination != nil {
-				if destination.PrefixRewrite != "" {
-					routeAction.Route.PrefixRewrite = destination.PrefixRewrite
+				// Gateway API: Path rewrite using replacePrefixMatch results in // or no rewrite CSL-12379-fix
+				// its a temporary fix for that issue as it needs to be fixed from envoy itself https://github.com/envoyproxy/envoy/issues/26055
+				ra := getRewriteActionForUserLogic(destination, routeMatch)
+				if ra != nil && ra.RegexRewrite != nil {
+					routeAction.Route.RegexRewrite = ra.RegexRewrite
+				} else if ra != nil && ra.PrefixRewrite != "" {
+					routeAction.Route.PrefixRewrite = ra.PrefixRewrite
 				}
 
 				if destination.RequestTimeout > 0 {
@@ -724,7 +763,8 @@ func (s *ResourceGenerator) makeUpstreamRouteForDiscoveryChain(
 				}
 
 				if destination.HasRetryFeatures() {
-					routeAction.Route.RetryPolicy = getRetryPolicyForDestination(destination)
+					s.Logger.Trace("creating custom retry policy if ", "isAggregate", isAggregate)
+					routeAction.Route.RetryPolicy = getRetryPolicyForDestination(destination, isAggregate)
 				}
 
 				if err := injectHeaderManipToRoute(destination, route); err != nil {
@@ -744,7 +784,7 @@ func (s *ResourceGenerator) makeUpstreamRouteForDiscoveryChain(
 		}
 
 	case structs.DiscoveryGraphNodeTypeSplitter:
-		routeAction, err := s.makeRouteActionForSplitter(upstreamsSnapshot, startNode.Splits, chain, forMeshGateway)
+		routeAction, err := s.makeRouteActionForSplitter(upstreamsSnapshot, startNode.Splits, chain, forMeshGateway, destinationPort)
 		if err != nil {
 			return nil, err
 		}
@@ -764,7 +804,7 @@ func (s *ResourceGenerator) makeUpstreamRouteForDiscoveryChain(
 		routes = []*envoy_route_v3.Route{defaultRoute}
 
 	case structs.DiscoveryGraphNodeTypeResolver:
-		routeAction, ok := s.makeRouteActionForChainCluster(upstreamsSnapshot, startNode.Resolver.Target, chain, forMeshGateway)
+		routeAction, ok := s.makeRouteActionForChainCluster(upstreamsSnapshot, startNode.Resolver.Target, chain, forMeshGateway, destinationPort)
 		if !ok {
 			break
 		}
@@ -808,7 +848,7 @@ func (s *ResourceGenerator) makeUpstreamRouteForDiscoveryChain(
 	return host, nil
 }
 
-func getRetryPolicyForDestination(destination *structs.ServiceRouteDestination) *envoy_route_v3.RetryPolicy {
+func getRetryPolicyForDestination(destination *structs.ServiceRouteDestination, isAggregate bool) *envoy_route_v3.RetryPolicy {
 	retryPolicy := &envoy_route_v3.RetryPolicy{}
 	if destination.NumRetries > 0 {
 		retryPolicy.NumRetries = response.MakeUint32Value(int(destination.NumRetries))
@@ -842,6 +882,22 @@ func getRetryPolicyForDestination(destination *structs.ServiceRouteDestination) 
 
 	retryPolicy.RetryOn = strings.Join(retryStrings, ",")
 
+	// If using an aggregate cluster (failover), add retry priority configuration
+	if isAggregate {
+		prevPriorityConfig := &prevpriorities.PreviousPrioritiesConfig{
+			UpdateFrequency: 1,
+		}
+		pbst, err := anypb.New(prevPriorityConfig)
+		if err != nil {
+			panic(err)
+		}
+		retryPolicy.RetryPriority = &envoy_route_v3.RetryPolicy_RetryPriority{
+			Name: "envoy.retry_priorities.previous_priorities",
+			ConfigType: &envoy_route_v3.RetryPolicy_RetryPriority_TypedConfig{
+				TypedConfig: pbst,
+			},
+		}
+	}
 	return retryPolicy
 }
 
@@ -1013,8 +1069,10 @@ func (s *ResourceGenerator) makeRouteActionForChainCluster(
 	targetID string,
 	chain *structs.CompiledDiscoveryChain,
 	forMeshGateway bool,
+	destinationPort string,
 ) (*envoy_route_v3.Route_Route, bool) {
 	clusterName := s.getTargetClusterName(upstreamsSnapshot, chain, targetID, forMeshGateway)
+	clusterName = destinationPortClusterName(clusterName, destinationPort)
 	if clusterName == "" {
 		return nil, false
 	}
@@ -1036,6 +1094,7 @@ func (s *ResourceGenerator) makeRouteActionForSplitter(
 	splits []*structs.DiscoverySplit,
 	chain *structs.CompiledDiscoveryChain,
 	forMeshGateway bool,
+	destinationPort string,
 ) (*envoy_route_v3.Route_Route, error) {
 	clusters := make([]*envoy_route_v3.WeightedCluster_ClusterWeight, 0, len(splits))
 	for _, split := range splits {
@@ -1047,6 +1106,7 @@ func (s *ResourceGenerator) makeRouteActionForSplitter(
 		targetID := nextNode.Resolver.Target
 
 		clusterName := s.getTargetClusterName(upstreamsSnapshot, chain, targetID, forMeshGateway)
+		clusterName = destinationPortClusterName(clusterName, destinationPort)
 		if clusterName == "" {
 			continue
 		}
@@ -1078,6 +1138,74 @@ func (s *ResourceGenerator) makeRouteActionForSplitter(
 			},
 		},
 	}, nil
+}
+
+// makeRouteActionForSplitterWithFailover is similar to makeRouteActionForSplitter but also
+// checks if any of the splits have an aggregate cluster (failover) and returns that flag.
+func (s *ResourceGenerator) makeRouteActionForSplitterWithFailover(
+	cfgSnap *proxycfg.ConfigSnapshot,
+	uid proxycfg.UpstreamID,
+	upstreamsSnapshot *proxycfg.ConfigSnapshotUpstreams,
+	splits []*structs.DiscoverySplit,
+	chain *structs.CompiledDiscoveryChain,
+	rawUpstreamConfig structs.UpstreamConfig,
+	forMeshGateway bool,
+	destinationPort string,
+) (*envoy_route_v3.Route_Route, bool, error) {
+	clusters := make([]*envoy_route_v3.WeightedCluster_ClusterWeight, 0, len(splits))
+	var hasAggregate bool
+
+	for _, split := range splits {
+		nextNode := chain.Nodes[split.NextNode]
+
+		if nextNode.Type != structs.DiscoveryGraphNodeTypeResolver {
+			return nil, false, fmt.Errorf("unexpected splitter destination node type: %s", nextNode.Type)
+		}
+
+		// Check if this split's resolver has failover (aggregate cluster)
+		upstreamConfig := finalizeUpstreamConfig(rawUpstreamConfig, chain, nextNode.Resolver.ConnectTimeout)
+		mappedTargets, err := s.mapDiscoChainTargets(cfgSnap, uid, chain, nextNode, upstreamConfig, forMeshGateway, destinationPort)
+		if err != nil {
+			s.Logger.Debug("failed to map disco chain targets for split", "error", err)
+		} else if mappedTargets.isAggregateCluster() {
+			s.Logger.Debug("split has aggregate cluster (failover)", "targetID", nextNode.Resolver.Target)
+			hasAggregate = true
+		}
+
+		targetID := nextNode.Resolver.Target
+		clusterName := s.getTargetClusterName(upstreamsSnapshot, chain, targetID, forMeshGateway)
+		clusterName = destinationPortClusterName(clusterName, destinationPort)
+		if clusterName == "" {
+			continue
+		}
+
+		// The smallest representable weight is 1/10000 or .01% but envoy
+		// deals with integers so scale everything up by 100x.
+		weight := int(split.Weight * 100)
+		cw := &envoy_route_v3.WeightedCluster_ClusterWeight{
+			Weight: response.MakeUint32Value(weight),
+			Name:   clusterName,
+		}
+		if err := injectHeaderManipToWeightedCluster(split.Definition, cw); err != nil {
+			return nil, false, err
+		}
+
+		clusters = append(clusters, cw)
+	}
+
+	if len(clusters) <= 0 {
+		return nil, false, fmt.Errorf("number of clusters in splitter must be > 0; got %d", len(clusters))
+	}
+
+	return &envoy_route_v3.Route_Route{
+		Route: &envoy_route_v3.RouteAction{
+			ClusterSpecifier: &envoy_route_v3.RouteAction_WeightedClusters{
+				WeightedClusters: &envoy_route_v3.WeightedCluster{
+					Clusters: clusters,
+				},
+			},
+		},
+	}, hasAggregate, nil
 }
 
 func injectLBToRouteAction(lb *structs.LoadBalancer, action *envoy_route_v3.RouteAction) error {
@@ -1244,4 +1372,41 @@ func injectHeaderManipToWeightedCluster(split *structs.ServiceSplit, c *envoy_ro
 		)
 	}
 	return nil
+}
+
+// getRewriteActionForUserLogic isolates the exact logic block you provided for testing.
+func getRewriteActionForUserLogic(destination *structs.ServiceRouteDestination, routeMatch *envoy_route_v3.RouteMatch) *envoy_route_v3.RouteAction {
+	routeAction := &envoy_route_v3.RouteAction{}
+
+	if destination == nil {
+		return routeAction
+	}
+	// --- THIS IS THE LOGIC UNDER TEST ---
+	if destination.PrefixRewrite == "/" {
+		// Build the basic regex pattern
+		regexPattern := fmt.Sprintf(`^%s(/?)(.*)`, regexp.QuoteMeta(routeMatch.GetPrefix()))
+
+		// Check if the route match is case-insensitive.
+		// The proto field is CaseSensitive; 'false' means case-insensitive.
+		isCaseInsensitive := routeMatch.CaseSensitive != nil && !routeMatch.CaseSensitive.Value
+
+		// If the match is case-insensitive, the rewrite regex must be too.
+		if isCaseInsensitive {
+			// Prepend the regex flag for case-insensitivity
+			regexPattern = "(?i)" + regexPattern
+		}
+
+		routeAction.RegexRewrite = &envoy_matcher_v3.RegexMatchAndSubstitute{
+			Pattern: &envoy_matcher_v3.RegexMatcher{
+				Regex: regexPattern,
+			},
+			Substitution: `/\2`,
+		}
+	} else if destination.PrefixRewrite != "" {
+		// Use standard PrefixRewrite for replacement (e.g., /v2 -> /api/v2)
+		routeAction.PrefixRewrite = destination.PrefixRewrite
+	}
+	// --- END OF LOGIC UNDER TEST ---
+
+	return routeAction
 }

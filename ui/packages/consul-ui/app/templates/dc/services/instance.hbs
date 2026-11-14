@@ -3,7 +3,7 @@
   SPDX-License-Identifier: BUSL-1.1
 }}
 
-<Route @name={{routeName}} as |route|>
+<Route @name={{this.routeName}} as |route|>
   <DataLoader
     @src={{uri
       '/${partition}/${nspace}/${dc}/service-instance/${id}/${node}/${name}/${peer}'
@@ -17,14 +17,13 @@
         peer=route.params.peer
       )
     }}
-    as |loader|
   >
 
-    <BlockSlot @name='error'>
+    <:error as |loader|>
       <AppError @error={{loader.error}} @login={{route.model.app.login.open}} />
-    </BlockSlot>
+    </:error>
 
-    <BlockSlot @name='disconnected' as |after|>
+    <:disconnected as |loader after|>
       {{#if (eq loader.error.status '404')}}
         <Hds::Toast
           @color='warning'
@@ -56,9 +55,9 @@
           </T.Description>
         </Hds::Toast>
       {{/if}}
-    </BlockSlot>
+    </:disconnected>
 
-    <BlockSlot @name='loaded'>
+    <:loaded as |loader|>
       {{#let loader.data as |item|}}
         {{#if item.IsOrigin}}
           <DataSource
@@ -73,7 +72,7 @@
                 name=route.params.name
               )
             }}
-            @onchange={{action (mut meta) value='data'}}
+            @onchange={{action (mut this.meta) value='data'}}
             as |meta|
           >
             {{! We only really need meta to get the correct ServiceID }}
@@ -100,46 +99,48 @@
                     peer=route.params.peer
                   )
                 }}
-                @onchange={{action (mut proxy) value='data'}}
+                @onchange={{action (mut this.proxy) value='data'}}
               />
             {{/if}}
           </DataSource>
         {{/if}}
         <AppView>
-          <BlockSlot @name='breadcrumbs'>
-            <ol>
-              <li><a href={{href-to 'dc.services' params=(hash peer=undefined)}}>All Services</a></li>
-              <li><a
-                  {{tooltip (concat 'Service (' item.Service.Service ')')}}
-                  data-test-back
-                  href={{href-to 'dc.services.show'}}
-                >
-                  Service ({{item.Service.Service}})
-                </a></li>
-            </ol>
-          </BlockSlot>
-          <BlockSlot @name='header'>
+          <:header>
             <h1>
               <route.Title @title={{item.Service.ID}} />
             </h1>
             <Consul::ExternalSource @item={{item}} @withInfo={{true}} />
             <Consul::Kind @item={{item}} @withInfo={{true}} />
+            {{#let (or item.Service.Address item.Node.Address) as |address|}}
+              {{#if address}}
+                <span class="consul-service-instance-address">
+                  Address: {{format-ipaddr address}}
+                  <Hds::Copy::Button
+                    @textToCopy={{format-ipaddr address}}
+                    @text={{t 'components.consul-copy-button.title' name='address'}}
+                    @isIconOnly={{true}}
+                    @size="small"
+                    data-test-copy-address
+                  />
+                </span>
+              {{/if}}
+            {{/let}}
             {{! TODO: Looks like we can get this straight from item.Proxy.Mode }}
             {{! the less we need `proxy` and `meta` the better }}
-            {{#if (eq meta.ServiceProxy.Mode 'transparent')}}
+            {{#if (eq this.meta.ServiceProxy.Mode 'transparent')}}
               <Consul::TransparentProxy />
             {{/if}}
-          </BlockSlot>
-          <BlockSlot @name='nav'>
+          </:header>
+          <:nav>
             <dl>
-              <dt>Service Name</dt>
+              <dt>Service name</dt>
               <dd><a
                   href='{{href-to "dc.services.show" item.Service.Service}}'
                 >{{item.Service.Service}}</a></dd>
             </dl>
             {{#unless item.Node.Meta.synthetic-node}}
               <dl>
-                <dt>Node Name</dt>
+                <dt>Node name</dt>
                 <dd><a
                     data-test-service-instance-node-name
                     href='{{href-to "dc.nodes.show" item.Node.Node}}'
@@ -148,7 +149,7 @@
             {{/unless}}
             {{#if item.Service.PeerName}}
               <dl>
-                <dt>Peer Name</dt>
+                <dt>Peer name</dt>
                 <dd><a
                     data-test-service-instance-peer-name
                     href={{href-to
@@ -159,63 +160,59 @@
                   >{{item.Service.PeerName}}</a></dd>
               </dl>
             {{/if}}
-          </BlockSlot>
-          <BlockSlot @name='actions'>
-            {{#let (or item.Service.Address item.Node.Address) as |address|}}
-              <ConsulCopyButton @value={{address}} @name='Address'>{{address}}</ConsulCopyButton>
-            {{/let}}
-          </BlockSlot>
-          <BlockSlot @name='content'>
+          </:nav>
+          <:content>
             <TabNav
               @items={{compact
                 (array
                   (hash
-                    label='Health Checks'
-                    href=(href-to 'dc.services.instance.healthchecks')
+                    label='Health checks'
+                    route='dc.services.instance.healthchecks'
                     selected=(is-href 'dc.services.instance.healthchecks')
                   )
                   (if
                     (eq item.Service.Kind 'mesh-gateway')
                     (hash
                       label='Addresses'
-                      href=(href-to 'dc.services.instance.addresses')
+                      route='dc.services.instance.addresses'
                       selected=(is-href 'dc.services.instance.addresses')
                     )
                   )
                   (if
-                    proxy
+                    this.proxy
                     (hash
                       label='Upstreams'
-                      href=(href-to 'dc.services.instance.upstreams')
+                      route='dc.services.instance.upstreams'
                       selected=(is-href 'dc.services.instance.upstreams')
                     )
                   )
                   (if
-                    proxy
+                    this.proxy
                     (hash
-                      label='Exposed Paths'
-                      href=(href-to 'dc.services.instance.exposedpaths')
+                      label='Exposed paths'
+                      route='dc.services.instance.exposedpaths'
                       selected=(is-href 'dc.services.instance.exposedpaths')
                     )
                   )
                   (hash
-                    label='Tags & Meta'
-                    href=(href-to 'dc.services.instance.metadata')
+                    label='Tags & metadata'
+                    route='dc.services.instance.metadata'
                     selected=(is-href 'dc.services.instance.metadata')
                   )
                 )
               }}
-            />
-            <Outlet
-              @name={{routeName}}
-              @model={{assign (hash proxy=proxy meta=meta item=item) route.model}}
-              as |o|
             >
-              {{outlet}}
-            </Outlet>
-          </BlockSlot>
+              <Outlet
+                @name={{this.routeName}}
+                @model={{assign (hash proxy=this.proxy meta=this.meta item=item) route.model}}
+                as |o|
+              >
+                {{outlet}}
+              </Outlet>
+            </TabNav>
+          </:content>
         </AppView>
       {{/let}}
-    </BlockSlot>
+    </:loaded>
   </DataLoader>
 </Route>

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package cachetype
@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"context"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
@@ -24,8 +25,8 @@ func TestGatewayServices(t *testing.T) {
 	rpc.On("RPC", mock.Anything, "Catalog.GatewayServices", mock.Anything, mock.Anything).Return(nil).
 		Run(func(args mock.Arguments) {
 			req := args.Get(2).(*structs.ServiceSpecificRequest)
-			require.Equal(t, uint64(24), req.QueryOptions.MinQueryIndex)
-			require.Equal(t, 1*time.Second, req.QueryOptions.MaxQueryTime)
+			require.Equal(t, uint64(24), req.MinQueryIndex)
+			require.Equal(t, 1*time.Second, req.MaxQueryTime)
 			require.True(t, req.AllowStale)
 			require.Equal(t, "foo", req.ServiceName)
 
@@ -43,12 +44,12 @@ func TestGatewayServices(t *testing.T) {
 			}
 			reply := args.Get(3).(*structs.IndexedGatewayServices)
 			reply.Services = services
-			reply.QueryMeta.Index = 48
+			reply.Index = 48
 			resp = reply
 		})
 
 	// Fetch
-	resultA, err := typ.Fetch(cache.FetchOptions{
+	resultA, err := typ.Fetch(context.Background(), cache.FetchOptions{
 		MinIndex: 24,
 		Timeout:  1 * time.Second,
 	}, &structs.ServiceSpecificRequest{

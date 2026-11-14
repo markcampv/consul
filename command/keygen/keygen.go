@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package keygen
@@ -42,7 +42,7 @@ func (c *cmd) Run(args []string) int {
 		return 1
 	}
 	if n != 32 {
-		c.UI.Error(fmt.Sprintf("Couldn't read enough entropy. Generate more entropy!"))
+		c.UI.Error("Couldn't read enough entropy. Generate more entropy!")
 		return 1
 	}
 

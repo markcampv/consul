@@ -1,13 +1,16 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package agent
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"path"
 	"strconv"
 	"strings"
 
@@ -23,7 +26,36 @@ func (s *HTTPHandlers) KVSEndpoint(resp http.ResponseWriter, req *http.Request) 
 	}
 
 	// Pull out the key name, validation left to each sub-handler
-	args.Key = strings.TrimPrefix(req.URL.Path, "/v1/kv/")
+	rawKey := strings.TrimPrefix(req.URL.Path, "/v1/kv/")
+
+	// Use path.Clean but preserve trailing slash for directory keys
+	// Special case: if rawKey is empty, don't clean it (path.Clean("") returns ".")
+	var cleanedKey string
+	if rawKey == "" {
+		cleanedKey = ""
+	} else {
+		cleanedKey = path.Clean(rawKey)
+		if strings.HasSuffix(rawKey, "/") && !strings.HasSuffix(cleanedKey, "/") {
+			cleanedKey += "/"
+		}
+	}
+	args.Key = cleanedKey
+
+	// The DisableKVKeyValidation configuration option controls whether
+	// we validate the key name to prevent path traversal or leading/trailing spaces.
+	// We strongly recommend leaving this validation enabled (false) unless you have a specific reason
+	// to disable it for legacy compatibility.
+	if args.Key != "" {
+		if err := validateKVKey(args.Key); err != nil {
+			if s.agent.config.DisableKVKeyValidation {
+				// Add a warning header for the user to see
+				warningMsg := fmt.Sprintf("KV key validation bypassed: %s. Consider enabling key validation for security.", err.Error())
+				resp.Header().Set("X-Consul-KV-Warning", warningMsg)
+			} else {
+				return nil, err
+			}
+		}
+	}
 
 	// Check for a key list
 	keyList := false
@@ -94,7 +126,7 @@ func (s *HTTPHandlers) KVSGet(resp http.ResponseWriter, req *http.Request, args 
 	if _, ok := params["raw"]; ok && method == "KVS.Get" {
 		body := out.Entries[0].Value
 		resp.Header().Set("Content-Length", strconv.FormatInt(int64(len(body)), 10))
-		resp.Header().Set("Content-Type", "text/plain")
+		resp.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		resp.Header().Set("X-Content-Type-Options", "nosniff")
 		resp.Header().Set("Content-Security-Policy", "sandbox")
 		resp.Write(body)
@@ -207,19 +239,45 @@ func (s *HTTPHandlers) KVSPut(resp http.ResponseWriter, req *http.Request, args 
 	}
 
 	// Check the content-length
-	if req.ContentLength > int64(s.agent.config.KVMaxValueSize) {
+	maxSize := int64(s.agent.config.KVMaxValueSize)
+	var buf *bytes.Buffer
+
+	switch {
+	case req.ContentLength <= 0 && req.Body == nil:
+		return "Request has no content-length & no body", nil
+
+	case req.ContentLength <= 0 && req.Body != nil:
+		// MaxBytesReader to limit copy of large requests with no Content-Length
+		byteReader := http.MaxBytesReader(nil, req.Body, maxSize)
+		buf = new(bytes.Buffer)
+		if _, err := io.Copy(buf, byteReader); err != nil {
+			var bodyTooLargeErr *http.MaxBytesError
+			if errors.As(err, &bodyTooLargeErr) {
+				return nil, HTTPError{
+					StatusCode: http.StatusRequestEntityTooLarge,
+					Reason:     fmt.Sprintf("Request body too large. Max allowed is %d bytes.", maxSize),
+				}
+			}
+			return nil, err
+		}
+
+	case req.ContentLength > maxSize:
+		// Throw error if Content-Length is greater than max size
 		return nil, HTTPError{
 			StatusCode: http.StatusRequestEntityTooLarge,
 			Reason: fmt.Sprintf("Request body(%d bytes) too large, max size: %d bytes. See %s.",
-				req.ContentLength, s.agent.config.KVMaxValueSize, "https://developer.hashicorp.com/docs/agent/config/config-files#kv_max_value_size"),
+				req.ContentLength, maxSize, "https://developer.hashicorp.com/docs/agent/config/config-files#kv_max_value_size"),
+		}
+
+	default:
+		// Copy the value
+		buf = bytes.NewBuffer(nil)
+		if _, err := io.Copy(buf, req.Body); err != nil {
+			return nil, err
 		}
 	}
+	req.Body = http.MaxBytesReader(resp, req.Body, int64(s.agent.config.KVMaxValueSize))
 
-	// Copy the value
-	buf := bytes.NewBuffer(nil)
-	if _, err := io.Copy(buf, req.Body); err != nil {
-		return nil, err
-	}
 	applyReq.DirEnt.Value = buf.Bytes()
 
 	// Make the RPC
@@ -301,4 +359,38 @@ func conflictingFlags(resp http.ResponseWriter, req *http.Request, flags ...stri
 	}
 
 	return false
+}
+
+func validateKVKey(key string) error {
+	if len(key) == 0 {
+		return fmt.Errorf("empty key name is not allowed")
+	}
+
+	// Adding this for consistency
+	if strings.HasPrefix(key, "/") {
+		return fmt.Errorf("invalid key name, must not begin with '/'")
+	}
+
+	if strings.HasPrefix(key, " ") || strings.HasSuffix(key, " ") {
+		return fmt.Errorf("invalid key name, leading/trailing spaces are not allowed")
+	}
+
+	parts := strings.Split(key, "/")
+	for _, p := range parts {
+		if p == ".." {
+			return fmt.Errorf("invalid key name, path traversal is not allowed")
+		}
+	}
+
+	decoded, err := url.PathUnescape(key)
+	if err == nil && decoded != key {
+		if strings.Contains(decoded, "..") {
+			return fmt.Errorf("invalid key name, path traversal is not allowed")
+		}
+		if strings.Contains(decoded, " ") {
+			return fmt.Errorf("invalid key name, leading/trailing spaces are not allowed")
+		}
+	}
+
+	return nil
 }

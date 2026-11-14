@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package consul
@@ -201,6 +201,26 @@ func testIdentityForToken(token string) (bool, structs.ACLIdentity, error) {
 				},
 				{
 					ID: "acl-wr",
+				},
+			},
+		}, nil
+	case "authenticated":
+		return true, &structs.ACLToken{
+			AccessorID: "some-id",
+			SecretID:   "some-id",
+			Policies: []structs.ACLTokenPolicyLink{
+				{
+					ID: "node-wr",
+				},
+			},
+		}, nil
+	case "anonymous":
+		return true, &structs.ACLToken{
+			AccessorID: "00000000-0000-0000-0000-000000000002",
+			SecretID:   "anonymous",
+			Policies: []structs.ACLTokenPolicyLink{
+				{
+					ID: "node-wr",
 				},
 			},
 		}, nil
@@ -1534,9 +1554,8 @@ func TestACLResolver_Client(t *testing.T) {
 					return acl.ErrNotFound
 				}
 
-				select {
-				case <-readyCh:
-				}
+				<-readyCh
+
 				time.Sleep(100 * time.Millisecond)
 				return nil
 			},
@@ -2326,7 +2345,7 @@ func TestACLResolver_ResolveToken_UpdatesPurgeTheCache(t *testing.T) {
 	require.NoError(t, err)
 
 	testutil.RunStep(t, "first resolve", func(t *testing.T) {
-		authz, err := srv.ACLResolver.ResolveToken(token)
+		authz, err := srv.ResolveToken(token)
 		require.NoError(t, err)
 		require.NotNil(t, authz)
 		require.Equal(t, acl.Allow, authz.KeyRead("foo", nil))
@@ -2345,7 +2364,7 @@ func TestACLResolver_ResolveToken_UpdatesPurgeTheCache(t *testing.T) {
 		err := msgpackrpc.CallWithCodec(codec, "ACL.PolicySet", &reqPolicy, &structs.ACLPolicy{})
 		require.NoError(t, err)
 
-		authz, err := srv.ACLResolver.ResolveToken(token)
+		authz, err := srv.ResolveToken(token)
 		require.NoError(t, err)
 		require.NotNil(t, authz)
 		require.Equal(t, acl.Deny, authz.KeyRead("foo", nil))
@@ -2361,7 +2380,7 @@ func TestACLResolver_ResolveToken_UpdatesPurgeTheCache(t *testing.T) {
 		err := msgpackrpc.CallWithCodec(codec, "ACL.TokenDelete", &req, &resp)
 		require.NoError(t, err)
 
-		_, err = srv.ACLResolver.ResolveToken(token)
+		_, err = srv.ResolveToken(token)
 		require.True(t, acl.IsErrNotFound(err), "Error %v is not acl.ErrNotFound", err)
 	})
 }

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package cluster
@@ -8,10 +8,11 @@ import (
 	"fmt"
 	"time"
 
-	dockercontainer "github.com/docker/docker/api/types/container"
 	"github.com/docker/go-connections/nat"
-	"github.com/hashicorp/go-multierror"
+	dockercontainer "github.com/moby/moby/api/types/container"
 	"github.com/testcontainers/testcontainers-go"
+
+	"github.com/hashicorp/go-multierror"
 
 	"github.com/hashicorp/consul/test/integration/consul-container/libs/utils"
 )
@@ -70,18 +71,19 @@ func LaunchContainerOnNode(
 		_ = container.Terminate(ctx)
 	})
 
-	ip, err := container.ContainerIP(ctx)
+	ip, err := containerNetworkIP(ctx, pod, podPrimaryNetwork)
 	if err != nil {
 		return nil, fmt.Errorf("fetching container IP: %w", err)
 	}
 
 	if utils.FollowLog {
-		if err := container.StartLogProducer(ctx); err != nil {
-			return nil, fmt.Errorf("starting log producer: %w", err)
-		}
+		// Consumers must be registered before the producer starts; it snapshots them.
 		container.FollowOutput(&LogConsumer{
 			Prefix: req.Name,
 		})
+		if err := container.StartLogProducer(ctx); err != nil {
+			return nil, fmt.Errorf("starting log producer: %w", err)
+		}
 		deferClean.Add(func() {
 			_ = container.StopLogProducer()
 		})
@@ -89,11 +91,11 @@ func LaunchContainerOnNode(
 
 	ports := make(map[string]nat.Port)
 	for _, portStr := range mapPorts {
-		mapped, err := pod.MappedPort(ctx, nat.Port(portStr))
+		mapped, err := pod.MappedPort(ctx, portStr)
 		if err != nil {
 			return nil, fmt.Errorf("mapping port %s: %w", portStr, err)
 		}
-		ports[portStr] = mapped
+		ports[portStr] = nat.Port(mapped.String())
 	}
 
 	info := &LaunchInfo{

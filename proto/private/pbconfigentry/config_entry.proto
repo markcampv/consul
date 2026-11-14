@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 syntax = "proto3";
@@ -8,13 +8,20 @@ package hashicorp.consul.internal.configentry;
 import "annotations/ratelimit/ratelimit.proto";
 import "google/protobuf/duration.proto";
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/wrappers.proto";
 import "private/pbcommon/common.proto";
 
 // ConfigEntryService handles operations related to config entries
 service ConfigEntryService {
   rpc GetResolvedExportedServices(GetResolvedExportedServicesRequest) returns (GetResolvedExportedServicesResponse) {
     option (hashicorp.consul.internal.ratelimit.spec) = {
-      operation_type: OPERATION_TYPE_READ,
+      operation_type: OPERATION_TYPE_READ
+      operation_category: OPERATION_CATEGORY_CONFIGENTRY
+    };
+  }
+  rpc GetImportedServices(GetImportedServicesRequest) returns (GetImportedServicesResponse) {
+    option (hashicorp.consul.internal.ratelimit.spec) = {
+      operation_type: OPERATION_TYPE_READ
       operation_category: OPERATION_CATEGORY_CONFIGENTRY
     };
   }
@@ -39,6 +46,21 @@ message Consumers {
   repeated string Partitions = 2;
 }
 
+message GetImportedServicesRequest {
+  string Partition = 1;
+}
+
+message GetImportedServicesResponse {
+  repeated ImportedService Services = 1;
+}
+
+message ImportedService {
+  string Service = 1;
+  common.EnterpriseMeta EnterpriseMeta = 2;
+  string SourcePeer = 3;
+  string SourcePartition = 4;
+}
+
 enum Kind {
   KindUnknown = 0;
   KindMeshConfig = 1;
@@ -55,6 +77,8 @@ enum Kind {
   KindJWTProvider = 12;
   KindExportedServices = 13;
   KindFileSystemCertificate = 14;
+  KindInferenceGateway = 15;
+  KindTerminatingGateway = 16;
 }
 
 message ConfigEntry {
@@ -79,6 +103,8 @@ message ConfigEntry {
     JWTProvider JWTProvider = 16;
     ExportedServices ExportedServices = 17;
     FileSystemCertificate FileSystemCertificate = 18;
+    InferenceGateway InferenceGateway = 19;
+    TerminatingGateway TerminatingGateway = 20;
   }
 }
 
@@ -130,6 +156,7 @@ message MeshDirectionalTLSConfig {
   string TLSMaxVersion = 2;
   // mog: func-from=cipherSuitesFromStructs func-to=cipherSuitesToStructs
   repeated string CipherSuites = 3;
+  repeated string ECDHCurves = 4;
 }
 
 // mog annotation:
@@ -425,6 +452,56 @@ message IngressService {
 
 // mog annotation:
 //
+// target=github.com/hashicorp/consul/agent/structs.TerminatingGatewayConfigEntry
+// output=config_entry.gen.go
+// name=Structs
+// ignore-fields=Kind,Name,RaftIndex,EnterpriseMeta
+message TerminatingGateway {
+  repeated LinkedService Services = 1;
+  GatewayCredentialInjection CredentialInjection = 2;
+  map<string, string> Meta = 3;
+  uint64 Hash = 4;
+}
+
+// mog annotation:
+//
+// target=github.com/hashicorp/consul/agent/structs.LinkedService
+// output=config_entry.gen.go
+// name=Structs
+message LinkedService {
+  string Name = 1;
+  string CAFile = 2;
+  string CertFile = 3;
+  string KeyFile = 4;
+  string SNI = 5;
+  bool DisableAutoHostRewrite = 6;
+  // mog: func-to=enterpriseMetaToStructs func-from=enterpriseMetaFromStructs
+  common.EnterpriseMeta EnterpriseMeta = 7;
+  GatewayServiceCredential Credential = 8;
+}
+
+// mog annotation:
+//
+// target=github.com/hashicorp/consul/agent/structs.GatewayCredentialInjection
+// output=config_entry.gen.go
+// name=Structs
+message GatewayCredentialInjection {
+  string UDSPath = 1;
+  string MessageTimeout = 2;
+}
+
+// mog annotation:
+//
+// target=github.com/hashicorp/consul/agent/structs.GatewayServiceCredential
+// output=config_entry.gen.go
+// name=Structs
+message GatewayServiceCredential {
+  string Mode = 1;
+  string BindingID = 2;
+}
+
+// mog annotation:
+//
 // target=github.com/hashicorp/consul/agent/structs.GatewayServiceTLSConfig
 // output=config_entry.gen.go
 // name=Structs
@@ -593,6 +670,8 @@ message ServiceDefaults {
   // mog: func-to=mutualTLSModeToStructs func-from=mutualTLSModeFromStructs
   MutualTLSMode MutualTLSMode = 15;
   uint64 Hash = 17;
+
+  optional uint32 MaxRequestHeadersKB = 18;
 }
 
 enum ProxyMode {
@@ -703,6 +782,7 @@ message UpstreamLimits {
   int32 MaxPendingRequests = 2;
   // mog: func-to=pointerToIntFromInt32 func-from=int32FromPointerToInt
   int32 MaxConcurrentRequests = 3;
+  PassiveHealthCheck PassiveHealthCheck = 4;
 }
 
 // mog annotation:
@@ -720,6 +800,12 @@ message PassiveHealthCheck {
   uint32 MaxEjectionPercent = 4;
   // mog: func-to=structs.DurationPointerFromProto func-from=structs.DurationPointerToProto
   google.protobuf.Duration BaseEjectionTime = 5;
+  // mog: target=EnforcingConsecutiveGatewayFailure func-to=pointerToUint32FromUint32 func-from=uint32FromPointerToUint32
+  uint32 EnforcingConsecutiveGatewayFailure = 6;
+  // mog: target=Consecutive5xx func-to=pointerToUint32FromUint32 func-from=uint32FromPointerToUint32
+  uint32 Consecutive5xx = 7;
+  // mog: target=ConsecutiveGatewayFailure func-to=pointerToUint32FromUint32 func-from=uint32FromPointerToUint32
+  uint32 ConsecutiveGatewayFailure = 8;
 }
 
 // mog annotation:
@@ -781,6 +867,14 @@ message APIGateway {
   repeated APIGatewayListener Listeners = 2;
   Status Status = 3;
   uint64 Hash = 4;
+  GatewayTLSConfig TLS = 5;
+  UpstreamLimits Defaults = 6;
+  // mog: func-to=gwExtAuthzToStructs func-from=gwExtAuthzFromStructs
+  APIGatewayExtAuthz ExtAuthz = 7;
+}
+
+message APIGatewayExtAuthz {
+  bool Enabled = 1;
 }
 
 // mog annotation:
@@ -810,6 +904,8 @@ message Condition {
 enum APIGatewayListenerProtocol {
   ListenerProtocolHTTP = 0;
   ListenerProtocolTCP = 1;
+  ListenerProtocolHTTP2 = 2;
+  ListenerProtocolGRPC = 3;
 }
 
 // mog annotation:
@@ -827,6 +923,8 @@ message APIGatewayListener {
   APIGatewayTLSConfiguration TLS = 5;
   APIGatewayPolicy Override = 6;
   APIGatewayPolicy Default = 7;
+
+  optional uint32 MaxRequestHeadersKB = 8;
 }
 
 // mog annotation:
@@ -842,6 +940,7 @@ message APIGatewayTLSConfiguration {
   string MaxVersion = 3;
   // mog: func-from=cipherSuitesFromStructs func-to=cipherSuitesToStructs
   repeated string CipherSuites = 4;
+  GatewayTLSSDSConfig SDS = 5;
 }
 
 // mog annotation:
@@ -908,6 +1007,17 @@ message BoundAPIGatewayListener {
   string Name = 1;
   repeated ResourceReference Certificates = 2;
   repeated ResourceReference Routes = 3;
+  // Fields copied from APIGatewayListener by the controller at reconcile time
+  // so that BoundAPIGatewayListener is self-contained for proxycfg/xds consumers.
+  string Hostname = 4;
+  // mog: func-to=int func-from=int32
+  int32 Port = 5;
+  // mog: func-to=apiGatewayProtocolToStructs func-from=apiGatewayProtocolFromStructs
+  APIGatewayListenerProtocol Protocol = 6;
+  APIGatewayTLSConfiguration TLS = 7;
+  APIGatewayPolicy Override = 8;
+  APIGatewayPolicy Default = 9;
+  optional uint32 MaxRequestHeadersKB = 10;
 }
 
 // mog annotation:
@@ -1007,6 +1117,7 @@ message HTTPHeaderMatch {
   HTTPHeaderMatchType Match = 1;
   string Name = 2;
   string Value = 3;
+  bool Invert = 4;
 }
 
 enum HTTPPathMatchType {
@@ -1056,6 +1167,66 @@ message HTTPFilters {
   TimeoutFilter TimeoutFilter = 4;
   // mog: func-to=routeJWTFilterToStructs func-from=routeJWTFilterFromStructs
   JWTFilter JWT = 5;
+  // mog: func-to=routeExtAuthzFilterToStructs func-from=routeExtAuthzFilterFromStructs
+  HTTPRouteExtAuthzFilter ExtAuthz = 6;
+  repeated ExtProcFilter ExtProc = 7;
+}
+
+// mog annotation:
+//
+// target=github.com/hashicorp/consul/agent/structs.ExtProcFilter
+// output=config_entry.gen.go
+// name=Structs
+message ExtProcFilter {
+  string StatPrefix = 1;
+  string Mode = 2;
+  ExtProcOverrides Overrides = 3;
+}
+
+// mog annotation:
+//
+// target=github.com/hashicorp/consul/agent/structs.ExtProcOverrides
+// output=config_entry.gen.go
+// name=Structs
+message ExtProcOverrides {
+  ExtProcProcessing Processing = 1;
+  repeated ExtProcMetadataKV GRPCInitialMetadata = 2;
+}
+
+// mog annotation:
+//
+// target=github.com/hashicorp/consul/agent/structs.ExtProcMetadataKV
+// output=config_entry.gen.go
+// name=Structs
+message ExtProcMetadataKV {
+  string Key = 1;
+  string Value = 2;
+}
+
+// mog annotation:
+//
+// target=github.com/hashicorp/consul/agent/structs.ExtProcProcessing
+// output=config_entry.gen.go
+// name=Structs
+message ExtProcProcessing {
+  ExtProcProcessingDirection Request = 1;
+  ExtProcProcessingDirection Response = 2;
+}
+
+// mog annotation:
+//
+// target=github.com/hashicorp/consul/agent/structs.ExtProcProcessingDirection
+// output=config_entry.gen.go
+// name=Structs
+message ExtProcProcessingDirection {
+  string HeadersMode = 1;
+  string BodyMode = 2;
+  string TrailersMode = 3;
+  int64 MaxBodyBytes = 4;
+}
+
+message HTTPRouteExtAuthzFilter {
+  bool Enabled = 1;
 }
 
 // mog annotation:
@@ -1128,6 +1299,8 @@ message HTTPService {
   // mog: func-to=enterpriseMetaToStructs func-from=enterpriseMetaFromStructs
   common.EnterpriseMeta EnterpriseMeta = 4;
   HTTPResponseFilters ResponseFilters = 5;
+  GatewayServiceTLSConfig TLS = 6;
+  UpstreamLimits Limits = 7;
 }
 
 // mog annotation:
@@ -1153,6 +1326,8 @@ message TCPService {
   string Name = 1;
   // mog: func-to=enterpriseMetaToStructs func-from=enterpriseMetaFromStructs
   common.EnterpriseMeta EnterpriseMeta = 2;
+  GatewayServiceTLSConfig TLS = 3;
+  UpstreamLimits Limits = 4;
 }
 
 // mog annotation:
@@ -1400,4 +1575,186 @@ message ExportedServicesConsumer {
   string Partition = 1;
   string Peer = 2;
   string SamenessGroup = 3;
+}
+
+// mog annotation:
+//
+// target=github.com/hashicorp/consul/agent/structs.InferenceGatewayConfigEntry
+// output=config_entry.gen.go
+// name=Structs
+// ignore-fields=Name,Kind,RaftIndex,EnterpriseMeta
+message InferenceGateway {
+  // This message carries EVERY field of structs.InferenceGatewayConfigEntry that
+  // is not part of the ConfigEntry envelope, because this stream is the entry's
+  // only path out of Consul.
+  //
+  // RENDERED fields (Processor, Failover, RequestTimeout) are read by proxycfg and the xDS
+  // renderer. FORWARDED fields (PII, Observability) are not interpreted here at
+  // all - Consul renders them into the gateway listener's consul.inference.policy
+  // metadata, which is how the co-located policy processor receives them. The
+  // processor does not read the config-entry HTTP API, so a field dropped here
+  // reaches nothing.
+  //
+  // TestInferenceGateway_ProtoRoundTrip fails for any field missing here.
+  //
+  // Numbering is dense and starts at 1: this entry ships for the first time in
+  // the release that introduces it, so there is no deployed peer whose field
+  // numbers have to be honoured. The rate-limit follow-up appends RateLimit and
+  // StateStore at 8 and 9. Once this HAS shipped, that freedom ends -- removed
+  // fields must then be reserved rather than renumbered.
+
+  InferenceGatewayProcessor Processor = 1;
+  map<string, string> Meta = 2;
+  uint64 Hash = 3;
+  InferenceGatewayFailover Failover = 4;
+  InferenceGatewayPII PII = 5;
+  InferenceGatewayObservability Observability = 6;
+  // A string rather than a Duration, mirroring the struct field and
+  // Failover.PerTryTimeout; Validate parses it at write time.
+  string RequestTimeout = 7;
+}
+
+// mog annotation:
+//
+// target=github.com/hashicorp/consul/agent/structs.InferenceGatewayPII
+// output=config_entry.gen.go
+// name=Structs
+message InferenceGatewayPII {
+  // mog: func-to=inferenceGatewayPIIScopeToStructs func-from=inferenceGatewayPIIScopeFromStructs
+  InferenceGatewayPIIScope Scope = 1;
+  // mog: func-to=inferenceGatewayPIIActionToStructs func-from=inferenceGatewayPIIActionFromStructs
+  InferenceGatewayPIIAction DefaultAction = 2;
+  // mog: func-to=int func-from=int32
+  int32 StreamHoldbackBytes = 3;
+  InferenceGatewayPIIMask Mask = 4;
+  repeated InferenceGatewayPIIDetector Detectors = 5;
+}
+
+// mog annotation:
+//
+// target=github.com/hashicorp/consul/agent/structs.InferenceGatewayPIIMask
+// output=config_entry.gen.go
+// name=Structs
+message InferenceGatewayPIIMask {
+  string Char = 1;
+  // mog: func-to=int func-from=int32
+  int32 KeepLast = 2;
+}
+
+// mog annotation:
+//
+// target=github.com/hashicorp/consul/agent/structs.InferenceGatewayPIIDetector
+// output=config_entry.gen.go
+// name=Structs
+message InferenceGatewayPIIDetector {
+  string Name = 1;
+  string Regex = 2;
+  // mog: func-to=inferenceGatewayPIIActionToStructs func-from=inferenceGatewayPIIActionFromStructs
+  InferenceGatewayPIIAction Action = 3;
+}
+
+// The zero value of each enum is "unset": the struct field is empty and the
+// processor applies its own default, so it must not be mistaken for a real choice.
+enum InferenceGatewayPIIScope {
+  InferenceGatewayPIIScopeUnset = 0;
+  InferenceGatewayPIIScopeRequest = 1;
+  InferenceGatewayPIIScopeResponse = 2;
+  InferenceGatewayPIIScopeBoth = 3;
+}
+
+enum InferenceGatewayPIIAction {
+  InferenceGatewayPIIActionUnset = 0;
+  InferenceGatewayPIIActionPlaceholder = 1;
+  InferenceGatewayPIIActionMask = 2;
+  InferenceGatewayPIIActionBlock = 3;
+  InferenceGatewayPIIActionOff = 4;
+}
+
+// mog annotation:
+//
+// target=github.com/hashicorp/consul/agent/structs.InferenceGatewayObservability
+// output=config_entry.gen.go
+// name=Structs
+message InferenceGatewayObservability {
+  InferenceGatewayMetrics Metrics = 1;
+  InferenceGatewayTracing Tracing = 2;
+}
+
+// mog annotation:
+//
+// target=github.com/hashicorp/consul/agent/structs.InferenceGatewayMetrics
+// output=config_entry.gen.go
+// name=Structs
+message InferenceGatewayMetrics {
+  // Enabled is a wrapper, not a bare bool, because unset and explicit false mean
+  // different things: metrics default to ON, so a block written only to set a port
+  // must not read as "turn metrics off". A bare bool would make nil and false
+  // indistinguishable on the wire and silently disable metrics on every
+  // server-managed proxy.
+  //
+  // mog: target=Enabled func-to=pointerToBoolFromBoolValue func-from=boolValueFromPointerToBool
+  google.protobuf.BoolValue Enabled = 1;
+  InferenceGatewayMetricsPrometheus Prometheus = 2;
+  InferenceGatewayOTLPExport OTLP = 3;
+  reserved 4, 5;
+  reserved "SemconvSchema", "CustomLabels";
+}
+
+// mog annotation:
+//
+// target=github.com/hashicorp/consul/agent/structs.InferenceGatewayMetricsPrometheus
+// output=config_entry.gen.go
+// name=Structs
+message InferenceGatewayMetricsPrometheus {
+  // Port is a wrapper for the same reason Metrics.Enabled is: 0 disables the scrape
+  // endpoint and unset keeps the default port, and a bare int32 cannot tell them
+  // apart.
+  //
+  // mog: target=Port func-to=pointerToIntFromInt32Value func-from=int32ValueFromPointerToInt
+  google.protobuf.Int32Value Port = 1;
+  reserved 2;
+  reserved "Path";
+}
+
+// mog annotation:
+//
+// target=github.com/hashicorp/consul/agent/structs.InferenceGatewayTracing
+// output=config_entry.gen.go
+// name=Structs
+message InferenceGatewayTracing {
+  bool Enabled = 1;
+  InferenceGatewayOTLPExport OTLP = 2;
+  double SampleRatio = 3;
+}
+
+// mog annotation:
+//
+// target=github.com/hashicorp/consul/agent/structs.InferenceGatewayOTLPExport
+// output=config_entry.gen.go
+// name=Structs
+message InferenceGatewayOTLPExport {
+  string Endpoint = 1;
+  bool Insecure = 2;
+}
+
+// mog annotation:
+//
+// target=github.com/hashicorp/consul/agent/structs.InferenceGatewayProcessor
+// output=config_entry.gen.go
+// name=Structs
+message InferenceGatewayProcessor {
+  string FailureMode = 1;
+  bool BodyModelRouting = 2;
+}
+
+// mog annotation:
+//
+// target=github.com/hashicorp/consul/agent/structs.InferenceGatewayFailover
+// output=config_entry.gen.go
+// name=Structs
+message InferenceGatewayFailover {
+  repeated string RetryOn = 1;
+  // mog: func-to=int func-from=int32
+  int32 MaxTiers = 2;
+  string PerTryTimeout = 3;
 }

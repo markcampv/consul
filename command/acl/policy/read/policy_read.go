@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package policyread
@@ -61,7 +61,7 @@ func (c *cmd) Run(args []string) int {
 	}
 
 	if c.policyID == "" && c.policyName == "" {
-		c.UI.Error(fmt.Sprintf("Must specify either the -id or -name parameters"))
+		c.UI.Error("Must specify either the -id or -name parameters")
 		return 1
 	}
 

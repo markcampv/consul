@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package consul
@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/armon/go-metrics"
 	"github.com/hashicorp/go-hclog"
+	"github.com/hashicorp/go-metrics"
 	"github.com/hashicorp/go-multierror"
 
 	"github.com/hashicorp/consul/agent/configentry"
@@ -165,10 +165,10 @@ func (s *Server) replicateConfig(ctx context.Context, lastRemoteIndex uint64, lo
 	//
 	// The lastRemoteIndex is not used when the entry exists either only in the local state or
 	// only in the remote state. In those situations we need to either delete it or create it.
-	if remote.QueryMeta.Index < lastRemoteIndex {
+	if remote.Index < lastRemoteIndex {
 		logger.Warn("Config Entry replication remote index moved backwards, forcing a full Config Entry sync",
 			"from", lastRemoteIndex,
-			"to", remote.QueryMeta.Index,
+			"to", remote.Index,
 		)
 		lastRemoteIndex = 0
 	}
@@ -224,5 +224,5 @@ func (s *Server) replicateConfig(ctx context.Context, lastRemoteIndex uint64, lo
 
 	// Return the index we got back from the remote side, since we've synced
 	// up with the remote state as of that index.
-	return remote.QueryMeta.Index, false, nil
+	return remote.Index, false, nil
 }

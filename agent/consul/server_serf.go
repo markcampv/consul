@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package consul
@@ -11,9 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/armon/go-metrics"
-
 	"github.com/hashicorp/go-hclog"
+	"github.com/hashicorp/go-metrics"
 	"github.com/hashicorp/memberlist"
 	"github.com/hashicorp/raft"
 	"github.com/hashicorp/serf/serf"
@@ -133,7 +132,7 @@ func (s *Server) setupSerfConfig(opts setupSerfOptions) (*serf.Config, error) {
 
 	// TODO(ACL-Legacy-Compat): remove in phase 2. These are kept for now to
 	// allow for upgrades.
-	if s.ACLResolver.ACLsEnabled() {
+	if s.ACLsEnabled() {
 		conf.Tags[metadata.TagACLs] = string(structs.ACLModeEnabled)
 	} else {
 		conf.Tags[metadata.TagACLs] = string(structs.ACLModeDisabled)

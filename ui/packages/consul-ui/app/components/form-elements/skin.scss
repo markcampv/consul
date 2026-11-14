@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -19,7 +19,7 @@ textarea:disabled + .CodeMirror,
 %form fieldset > p,
 %form-element-note,
 %form-element-text-input::placeholder {
-  color: var(--token-color-foreground-disabled);
+  color: var(--token-color-foreground-faint);
 }
 %form-element-error > input,
 %form-element-error > textarea {

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package resource_test
@@ -60,7 +60,7 @@ func TestWriteStatus_ACL(t *testing.T) {
 			mockACLResolver := &svc.MockACLResolver{}
 			mockACLResolver.On("ResolveTokenAndDefaultMeta", mock.Anything, mock.Anything, mock.Anything).
 				Return(tc.authz, nil)
-			builder.ServiceImpl().Config.ACLResolver = mockACLResolver
+			builder.ServiceImpl().ACLResolver = mockACLResolver
 
 			// exercise ACL
 			_, err = client.WriteStatus(testContext(t), validWriteStatusRequest(t, artist))

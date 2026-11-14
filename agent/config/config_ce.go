@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 //go:build !consulent
@@ -13,6 +13,6 @@ import (
 // EnterpriseMeta stub
 type EnterpriseMeta struct{}
 
-func (_ *EnterpriseMeta) ToStructs() acl.EnterpriseMeta {
+func (*EnterpriseMeta) ToStructs() acl.EnterpriseMeta {
 	return *structs.DefaultEnterpriseMetaInDefaultPartition()
 }

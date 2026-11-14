@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) HashiCorp, Inc.
+# Copyright IBM Corp. 2024, 2026
 # SPDX-License-Identifier: BUSL-1.1
 
 
@@ -25,7 +25,9 @@ deep-copy \
   -type ExposeConfig \
   -type ExportedServicesConfigEntry \
   -type FileSystemCertificateConfigEntry \
+  -type GatewayCredentialInjection \
   -type GatewayService \
+  -type GatewayServiceCredential \
   -type GatewayServiceTLSConfig \
   -type HTTPHeaderModifiers \
   -type HTTPRouteConfigEntry \

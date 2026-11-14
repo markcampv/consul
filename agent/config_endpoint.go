@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package agent
@@ -9,13 +9,14 @@ import (
 	"strconv"
 	"strings"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
+
 	"github.com/hashicorp/consul/acl"
 	external "github.com/hashicorp/consul/agent/grpc-external"
 	"github.com/hashicorp/consul/agent/structs"
 	"github.com/hashicorp/consul/api"
 	"github.com/hashicorp/consul/proto/private/pbconfigentry"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/metadata"
 )
 
 const ConfigEntryNotFoundErr string = "Config entry not found"
@@ -27,7 +28,7 @@ func (s *HTTPHandlers) Config(resp http.ResponseWriter, req *http.Request) (inte
 		return s.configGet(resp, req)
 
 	case "DELETE":
-		return s.configDelete(resp, req)
+		return s.configDelete(req)
 
 	default:
 		return nil, MethodNotAllowedError{req.Method, []string{"GET", "DELETE"}}
@@ -85,7 +86,7 @@ func (s *HTTPHandlers) configGet(resp http.ResponseWriter, req *http.Request) (i
 }
 
 // configDelete deletes the given config entry.
-func (s *HTTPHandlers) configDelete(resp http.ResponseWriter, req *http.Request) (interface{}, error) {
+func (s *HTTPHandlers) configDelete(req *http.Request) (interface{}, error) {
 	var args structs.ConfigEntryRequest
 	s.parseDC(req, &args.Datacenter)
 	s.parseToken(req, &args.Token)
@@ -216,6 +217,46 @@ func (s *HTTPHandlers) ExportedServices(resp http.ResponseWriter, req *http.Requ
 	}
 
 	svcs := make([]api.ResolvedExportedService, len(result.Services))
+
+	for idx, svc := range result.Services {
+		svcs[idx] = *svc.ToAPI()
+	}
+
+	return svcs, nil
+}
+
+func (s *HTTPHandlers) ImportedServices(resp http.ResponseWriter, req *http.Request) (interface{}, error) {
+	var entMeta acl.EnterpriseMeta
+	if err := s.parseEntMetaPartition(req, &entMeta); err != nil {
+		return nil, err
+	}
+	args := pbconfigentry.GetImportedServicesRequest{
+		Partition: entMeta.PartitionOrEmpty(),
+	}
+
+	var dc string
+	options := structs.QueryOptions{}
+	s.parse(resp, req, &dc, &options)
+	ctx, err := external.ContextWithQueryOptions(req.Context(), options)
+	if err != nil {
+		return nil, err
+	}
+
+	var header metadata.MD
+	result, err := s.agent.grpcClientConfigEntry.GetImportedServices(ctx, &args, grpc.Header(&header))
+	if err != nil {
+		return nil, err
+	}
+
+	meta, err := external.QueryMetaFromGRPCMeta(header)
+	if err != nil {
+		return result.Services, fmt.Errorf("could not convert gRPC metadata to query meta: %w", err)
+	}
+	if err := setMeta(resp, &meta); err != nil {
+		return nil, err
+	}
+
+	svcs := make([]api.ImportedService, len(result.Services))
 
 	for idx, svc := range result.Services {
 		svcs[idx] = *svc.ToAPI()

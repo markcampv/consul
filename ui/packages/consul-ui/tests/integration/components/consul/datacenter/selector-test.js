@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -11,6 +11,16 @@ import { render } from '@ember/test-helpers';
 module('Integration | Component | consul datacenter selector', function (hooks) {
   setupRenderingTest(hooks);
 
+  hooks.beforeEach(function () {
+    // The nav-selector uses @preserveContentInDom so dc items (with href-to)
+    // are always rendered. Stub router:main so hrefTo helper can compute a URL.
+    const router = this.owner.lookup('router:main');
+    if (router && (typeof router.location === 'string' || !router.location.hrefTo)) {
+      // Replace the location with a stub object that has a hrefTo method
+      router.location = { hrefTo: () => '#' };
+    }
+  });
+
   test('it does not display a dropdown when only one dc is available', async function (assert) {
     const dcs = [
       {
@@ -21,10 +31,10 @@ module('Integration | Component | consul datacenter selector', function (hooks) 
     this.set('dc', dcs[0]);
 
     await render(hbs`
-      <Hds::SideNav::List as |SNL|>
-        <Consul::Datacenter::Selector @list={{SNL}} @dcs={{this.dcs}} @dc={{this.dc}} />
-      </Hds::SideNav::List>
-    `);
+        <Hds::AppSideNav::List as |SNL|>
+          <Consul::Datacenter::Selector @list={{SNL}} @dcs={{this.dcs}} @dc={{this.dc}} />
+        </Hds::AppSideNav::List>
+      `);
 
     assert
       .dom('[data-test-datacenter-menu]')
@@ -48,10 +58,10 @@ module('Integration | Component | consul datacenter selector', function (hooks) 
     this.set('dc', dcs[0]);
 
     await render(hbs`
-      <Hds::SideNav::List as |SNL|>
-        <Consul::Datacenter::Selector @list={{SNL}} @dcs={{this.dcs}} @dc={{this.dc}} />
-      </Hds::SideNav::List>
-    `);
+        <Hds::AppSideNav::List as |SNL|>
+          <Consul::Datacenter::Selector @list={{SNL}} @dcs={{this.dcs}} @dc={{this.dc}} />
+        </Hds::AppSideNav::List>
+      `);
 
     assert
       .dom('[data-test-datacenter-single]')

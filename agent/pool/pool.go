@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package pool
@@ -456,7 +456,7 @@ func DialRPCViaMeshGateway(
 		return nil, nil, err
 	}
 
-	var conn net.Conn = tlsConn
+	var conn = tlsConn
 
 	var hc HalfCloser
 	if tlsConn, ok := conn.(*tls.Conn); ok {

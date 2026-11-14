@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package tlsutil
@@ -83,6 +83,9 @@ type ProtocolConfig struct {
 	// even though they are standardized by IANA because it would increase
 	// the likelihood of an operator inadvertently setting an insecure configuration
 	CipherSuites []types.TLSCipherSuite
+
+	// ECDHCurves is the list of ECDH/KEM curves to use for key agreement.
+	ECDHCurves []types.TLSECDHCurve
 
 	// VerifyOutgoing is used to verify the authenticity of outgoing
 	// connections.  This means that TLS requests are used, and TCP
@@ -598,6 +601,12 @@ func (c *Configurator) commonTLSConfig(state protocolConfig, cfg ProtocolConfig,
 
 		cipherSuites, _ := cipherSuiteLookup(cfg.CipherSuites)
 		tlsConfig.CipherSuites = cipherSuites
+	}
+
+	// Set the ECDH curves
+	if len(cfg.ECDHCurves) != 0 {
+		curves, _ := curveLookup(cfg.ECDHCurves)
+		tlsConfig.CurvePreferences = curves
 	}
 
 	// GetCertificate is used when acting as a server and responding to
@@ -1191,4 +1200,30 @@ func CipherString(ciphers []types.TLSCipherSuite) (string, error) {
 	}
 
 	return strings.Join(cipherStrings, ","), nil
+}
+
+var goTLSCurves = map[types.TLSECDHCurve]tls.CurveID{
+	types.CurveX25519MLKEM768: tls.X25519MLKEM768,
+	types.CurveX25519:         tls.X25519,
+	types.CurveP256:           tls.CurveP256,
+	types.CurveP384:           tls.CurveP384,
+	types.CurveP521:           tls.CurveP521,
+}
+
+func curveLookup(curves []types.TLSECDHCurve) ([]tls.CurveID, error) {
+	out := []tls.CurveID{}
+
+	if len(curves) == 0 {
+		return []tls.CurveID{}, nil
+	}
+
+	for _, curve := range curves {
+		if v, ok := goTLSCurves[curve]; ok {
+			out = append(out, v)
+		} else {
+			return out, fmt.Errorf("unsupported curve %q", curve)
+		}
+	}
+
+	return out, nil
 }

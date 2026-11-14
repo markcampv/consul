@@ -4,7 +4,7 @@
 }}
 
 <Route
-  @name={{routeName}}
+  @name={{this.routeName}}
 as |route|>
   <DataLoader @src={{
     uri '/${partition}/${nspace}/${dc}/token/${id}'
@@ -14,10 +14,9 @@ as |route|>
         dc=route.params.dc
         id=(or route.params.id '')
       )
-    }}
-  as |loader|>
+    }}>
 
-    <BlockSlot @name="error">
+    <:error as |loader|>
       {{#if (eq loader.error.status '401')}}
         <Consul::Acl::Disabled />
       {{else}}
@@ -26,9 +25,9 @@ as |route|>
           @login={{route.model.app.login.open}}
         />
       {{/if}}
-    </BlockSlot>
+    </:error>
 
-    <BlockSlot @name="loaded">
+    <:loaded as |loader|>
 {{#let
 
   route.params.dc
@@ -41,12 +40,7 @@ as |dc partition nspace item create|}}
   <AppView
     @login={{route.model.app.login.open}}
   >
-      <BlockSlot @name="breadcrumbs">
-          <ol>
-              <li><a data-test-back href={{href-to 'dc.acls.tokens'}}>All Tokens</a></li>
-          </ol>
-      </BlockSlot>
-      <BlockSlot @name="header">
+      <:header>
           <h1>
     {{#if create}}
               <route.Title @title="New Token" />
@@ -54,93 +48,91 @@ as |dc partition nspace item create|}}
               <route.Title @title="Edit Token" />
     {{/if}}
           </h1>
-      </BlockSlot>
-      <BlockSlot @name="actions">
+      </:header>
+      <:actions>
   {{#if (not create)}}
     <Hds::ButtonSet>
-    {{#if (not-eq item.AccessorID token.AccessorID)}}
-        <ConfirmationDialog @message="Are you sure you want to use this ACL token?">
-          <BlockSlot @name="action" as |confirm|>
-            <Hds::Button
-              @text='Use'
-              @color='secondary'
-              data-test-use
-              {{ action confirm 'use' item }}
-            />
-          </BlockSlot>
-          <BlockSlot @name="dialog" as |execute cancel message|>
-            <p>
-                {{message}}
-            </p>
-            <Hds::ButtonSet>
-              <Hds::Button
-                @text='Confirm Use'
-                @color='critical'
-                data-test-confirm-use
-                {{action execute}}
-              />
-              <Hds::Button
-                @text='Cancel'
-                @color='secondary'
-                {{action cancel}}
-              />
-            </Hds::ButtonSet>
-          </BlockSlot>
-        </ConfirmationDialog>
-    {{/if}}
-    {{#if (can "duplicate token" item=item)}}
-      <Hds::Button
-        @text='Duplicate'
-        @color='secondary'
-        data-test-clone
-        {{ action "clone" item }}
-      />
-    {{/if}}
+      {{#if (not-eq item.AccessorID this.token.AccessorID)}}
+        <Hds::Button
+          @text='Use'
+          @color='secondary'
+          @icon='sign-in'
+          @iconPosition='leading'
+          data-test-use
+          {{on 'click' (fn this.openUseModal item)}}
+        />
+      {{/if}}
+      {{#if (can "duplicate token" item=item)}}
+        <Hds::Button
+          @text='Duplicate'
+          @color='secondary'
+          @icon='duplicate'
+          @iconPosition='leading'
+          data-test-clone
+          {{on 'click' (fn this.onClone item)}}
+        />
+      {{/if}}
     </Hds::ButtonSet>
   {{/if}}
-      </BlockSlot>
-      <BlockSlot @name="content">
+      </:actions>
+      <:content>
+  {{#if this.itemToUse}}
+    <Hds::Modal
+      @color='neutral'
+      @onClose={{this.closeUseModal}}
+      as |M|
+    >
+      <M.Header @icon='info'>Confirm use</M.Header>
+      <M.Body>
+        <p>Are you sure you want to use this ACL token?</p>
+      </M.Body>
+      <M.Footer as |F|>
+        <Hds::ButtonSet>
+          <Hds::Button
+            @text='Use'
+            @color='primary'
+            data-test-confirm-use
+            {{on 'click' this.confirmUse}}
+          />
+          <Hds::Button
+            @text='Cancel'
+            @color='secondary'
+            {{on 'click' F.close}}
+          />
+        </Hds::ButtonSet>
+      </M.Footer>
+    </Hds::Modal>
+  {{/if}}
           {{#if (token/is-legacy item)}}
-            <Hds::Alert @type='inline' class='mb-6' as |A|>
+            <Hds::Alert @type='inline' as |A|>
               <A.Title>Update</A.Title>
               <A.Description>We have upgraded our ACL system by allowing you to create reusable policies which you can then apply to tokens. Don't worry, even though this token was written in the old style, it is still valid. However, we do recommend upgrading your old tokens to the new style.</A.Description>
               <A.Link::Standalone @text='Learn more'
-                                  @href="{{env 'CONSUL_DOCS_URL'}}/guides/acl-migrate-tokens.html"
+                                  @href="{{env 'CONSUL_HOME_URL'}}/consul/tutorials/archive/access-control-token-migration"
                                   @icon='docs-link'
                                   @iconPosition='trailing' />
             </Hds::Alert>
           {{/if}}
-  {{#if (not create) }}
-        <div class="definition-table">
-            <dl>
-              <dt>AccessorID</dt>
-              <dd>
-                <CopyableCode
-                  @value={{item.AccessorID}}
-                  @name="AccessorID"
-                />
-              </dd>
-              <dt>Token</dt>
-              <dd>
-                <CopyableCode
-                  @obfuscated={{true}}
-                  @value={{item.SecretID}}
-                  @name="Token"
-                />
-              </dd>
-  {{#if (and (not (token/is-legacy item)) (not create))}}
-              <dt>Scope</dt>
-              <dd>
-                {{if item.Local 'local' 'global' }}
-              </dd>
-  {{/if}}
-            </dl>
-        </div>
-  {{/if}}
-          {{ partial 'dc/acls/tokens/form'}}
-      </BlockSlot>
+          <Consul::Token::Form
+            @form={{this.form}}
+            @item={{item}}
+            @token={{this.token}}
+            @create={{create}}
+            @local={{item.Local}}
+            @name={{item.Name}}
+            @dc={{dc}}
+            @partition={{partition}}
+            @nspace={{nspace}}
+            @id={{route.params.id}}
+            @onCreate={{fn this.onCreate item}}
+            @onUpdate={{fn this.onUpdate item}}
+            @onCancel={{fn this.onCancel item}}
+            @onDelete={{fn this.onDelete item}}
+            @onChange={{action 'change'}}
+          />
+      </:content>
   </AppView>
 {{/let}}
-    </BlockSlot>
+    </:loaded>
   </DataLoader>
 </Route>

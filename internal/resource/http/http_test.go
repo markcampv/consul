@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package http
@@ -56,7 +56,7 @@ func TestResourceHandler_InputValidation(t *testing.T) {
 			Scope: resource.ScopeNamespace,
 		},
 		client,
-		func(req *http.Request, token *string) { return },
+		func(req *http.Request, token *string) {},
 		hclog.NewNullLogger(),
 	}
 
@@ -126,6 +126,31 @@ func TestResourceHandler_InputValidation(t *testing.T) {
 			require.Contains(t, string(b), tc.responseBodyContains)
 		})
 	}
+}
+
+func TestResourceHandler_OversizedChunkedWrite(t *testing.T) {
+	client := svctest.NewResourceServiceBuilder().
+		WithRegisterFns(demo.RegisterTypes).
+		Run(t)
+
+	req := httptest.NewRequest(http.MethodPut, "/keith-urban", strings.NewReader(strings.Repeat(" ", 512*1024+1)))
+	req.ContentLength = -1
+	req.TransferEncoding = []string{"chunked"}
+	resp := httptest.NewRecorder()
+	req.Body = http.MaxBytesReader(resp, req.Body, 512*1024)
+
+	handler := resourceHandler{
+		resource.Registration{
+			Type:  demo.TypeV2Artist,
+			Proto: &pbdemov2.Artist{},
+			Scope: resource.ScopeNamespace,
+		},
+		client,
+		func(req *http.Request, token *string) {},
+		hclog.NewNullLogger(),
+	}
+	handler.ServeHTTP(resp, req)
+	require.Equal(t, http.StatusRequestEntityTooLarge, resp.Code)
 }
 
 func TestResourceWriteHandler(t *testing.T) {

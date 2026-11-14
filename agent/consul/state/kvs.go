@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package state
@@ -115,7 +115,7 @@ func (s *Store) ReapTombstones(idx uint64, index uint64) error {
 
 // KVSSet is used to store a key/value pair.
 func (s *Store) KVSSet(idx uint64, entry *structs.DirEntry) error {
-	entry.EnterpriseMeta.Normalize()
+	entry.Normalize()
 	tx := s.db.WriteTxn(idx)
 	defer tx.Abort()
 

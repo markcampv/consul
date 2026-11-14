@@ -1,0 +1,85 @@
+{{!
+  Copyright (c) HashiCorp, Inc.
+  SPDX-License-Identifier: BUSL-1.1
+}}
+
+<div class={{class-map "consul-peer-form-generate"}} ...attributes>
+  <StateMachine
+    @src={{require
+      "./chart.xstate"
+      from="/components/consul/peer/form/generate"
+    }}
+    @initial={{if @regenerate "loading" "idle"}}
+    as |fsm|
+  >
+
+    {{#let (dom-guid) as |id reset|}}
+      <form {{on "submit" (fn fsm.dispatch "LOAD")}} id={{id}}>
+
+        <fsm.State @matches="error">
+          <Hds::Alert @type="inline" @color='critical' class='mb-3 mt-2' as |A|>
+            <A.Title>Error</A.Title>
+            <A.Description>{{fsm.state.context.error.message}}</A.Description>
+          </Hds::Alert>
+        </fsm.State>
+
+        {{! Regenerating an existing peer's token has no name/address fields
+            to fill in — it jumps straight to loading, so there's nothing to
+            keep showing. Creating a new peer does, and per Figma those
+            fields stay visible (filled in, behind the "Copy token" modal's
+            backdrop) rather than being swapped out once the token's ready —
+            so, unlike before, these aren't gated to only the idle/error
+            states. }}
+        {{yield
+          (hash
+            success=(state-matches fsm.state "success")
+            item=@item
+            Fieldsets=(if
+              (not @regenerate)
+              (component "consul/peer/form/generate/fieldsets" item=@item)
+            )
+            Actions=(if
+              (not (or @regenerate (state-matches fsm.state "success")))
+              (component
+                "consul/peer/form/generate/actions"
+                item=@item
+                id=id
+                onCancel=@onCancel
+              )
+            )
+            TokenFieldsets=(if
+              (state-matches fsm.state "success")
+              (component
+                "consul/peer/form/token/fieldsets"
+                item=@item
+                token=fsm.state.context.PeeringToken
+              )
+            )
+          )
+        }}
+
+        <fsm.State @matches="loading">
+          <DataSource
+            @src={{uri
+              "/${partition}/${nspace}/${dc}/peering/token-for/${name}/${externalAddresses}"
+              (hash
+                partition=@item.Partition
+                nspace=""
+                dc=@item.Datacenter
+                name=@item.Name
+                externalAddresses=@item.ServerExternalAddresses
+              )
+            }}
+            @onchange={{queue
+              (optional @onchange)
+              (pick "data" (fn fsm.dispatch "SUCCESS"))
+            }}
+            @onerror={{queue (fn fsm.dispatch "ERROR")}}
+          />
+        </fsm.State>
+
+      </form>
+    {{/let}}
+
+  </StateMachine>
+</div>

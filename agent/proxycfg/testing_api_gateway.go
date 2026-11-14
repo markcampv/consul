@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package proxycfg
@@ -37,6 +37,44 @@ func TestConfigSnapshotAPIGateway(
 
 	if configFn != nil {
 		configFn(entry, boundEntry)
+	}
+
+	// Mirror what newGatewayMeta() does in the controller: copy Port/Protocol/
+	// Hostname and other config fields from APIGatewayListener into the
+	// corresponding BoundAPIGatewayListener. This keeps test fixtures that only
+	// set entry.Listeners (and leave the bound fields blank) working correctly
+	// after we removed snap.APIGateway.Listeners and made BoundListeners the
+	// single source of truth.
+	if len(entry.Listeners) > 0 && len(boundEntry.Listeners) > 0 {
+		listenersByName := make(map[string]structs.APIGatewayListener, len(entry.Listeners))
+		for _, l := range entry.Listeners {
+			listenersByName[l.Name] = l
+		}
+		for i, bl := range boundEntry.Listeners {
+			if l, ok := listenersByName[bl.Name]; ok {
+				if bl.Port == 0 {
+					boundEntry.Listeners[i].Port = l.Port
+				}
+				if bl.Protocol == "" {
+					boundEntry.Listeners[i].Protocol = l.Protocol
+				}
+				if bl.Hostname == "" {
+					boundEntry.Listeners[i].Hostname = l.Hostname
+				}
+				if bl.TLS.IsEmpty() {
+					boundEntry.Listeners[i].TLS = l.TLS
+				}
+				if bl.Override == nil {
+					boundEntry.Listeners[i].Override = l.Override
+				}
+				if bl.Default == nil {
+					boundEntry.Listeners[i].Default = l.Default
+				}
+				if bl.MaxRequestHeadersKB == nil {
+					boundEntry.Listeners[i].MaxRequestHeadersKB = l.MaxRequestHeadersKB
+				}
+			}
+		}
 	}
 
 	baseEvents := []UpdateEvent{
@@ -93,7 +131,7 @@ func TestConfigSnapshotAPIGateway(
 		// Add a discovery chain watch event for each service.
 		for _, serviceName := range route.GetServiceNames() {
 			discoChain := UpdateEvent{
-				CorrelationID: fmt.Sprintf("discovery-chain:%s", UpstreamIDString("", "", serviceName.Name, &serviceName.EnterpriseMeta, "")),
+				CorrelationID: fmt.Sprintf("discovery-chain:%s", UpstreamIDString("", "", serviceName.Name, &serviceName.EnterpriseMeta, "", "")),
 				Result: &structs.DiscoveryChainResponse{
 					Chain: discoverychain.TestCompileConfigEntries(t, serviceName.Name, "default", "default", "dc1", connect.TestClusterID+".consul", nil, set),
 				},

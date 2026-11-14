@@ -1,0 +1,73 @@
+{{!
+  Copyright (c) HashiCorp, Inc.
+  SPDX-License-Identifier: BUSL-1.1
+}}
+
+<div class={{class-map "consul-peer-form-generate-fieldsets"}} ...attributes>
+  <StateMachine
+    @src={{require
+      "/machines/validate.xstate"
+      from="/components/consul/peer/form/generate/fieldsets"
+    }}
+    as |fsm|
+  >
+    {{#let
+      (hash
+        help=(concat
+          (t "common.validations.dns-hostname.help")
+          (t "common.validations.immutable.help")
+        )
+        Name=(array
+          (hash
+            test=(t "common.validations.dns-hostname.test")
+            error=(t "common.validations.dns-hostname.error" name="Name")
+          )
+        )
+      )
+      as |Name|
+    }}
+      <fieldset>
+        <Hds::Form::TextInput::Field
+          name="Name"
+          @value={{@item.Name}}
+          @isRequired={{true}}
+          @isInvalid={{if (get fsm.state.context.errors "Name") true false}}
+          {{validate @item validations=Name chart=fsm}}
+          {{on "input" (pick "target.value" (set @item "Name"))}}
+          data-test-peer-name
+          as |F|
+        >
+          <F.Label>{{t "components.consul.peer.generate.name"}}</F.Label>
+          <F.HelperText>{{Name.help}}</F.HelperText>
+          {{#if (get fsm.state.context.errors "Name")}}
+            <F.Error>{{get (get fsm.state.context.errors "Name") "message"}}</F.Error>
+          {{/if}}
+        </Hds::Form::TextInput::Field>
+        {{yield (hash valid=(not (state-matches fsm.state "error")))}}
+      </fieldset>
+
+    {{/let}}
+
+    {{#let
+      (hash help=(t "common.validations.server-external-addresses.help"))
+      as |ServerExternalAddresses|
+    }}
+      <fieldset>
+        <Hds::Form::TextInput::Field
+          name="ServerExternalAddresses"
+          @value={{@item.ServerExternalAddresses}}
+          @isOptional={{true}}
+          {{validate @item validations=ServerExternalAddresses chart=fsm}}
+          {{on "input" (pick "target.value" this.onInput)}}
+          data-test-peer-addresses
+          as |F|
+        >
+          <F.Label>{{t "components.consul.peer.generate.addresses"}}</F.Label>
+          <F.HelperText>{{ServerExternalAddresses.help}}</F.HelperText>
+        </Hds::Form::TextInput::Field>
+        {{yield (hash valid=(not (state-matches fsm.state "error")))}}
+      </fieldset>
+
+    {{/let}}
+  </StateMachine>
+</div>

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package fsm
@@ -550,7 +550,7 @@ func decodeConfigEntryOperation(buf []byte, req *structs.ConfigEntryRequest) err
 	if err := structs.Decode(buf, newReq); err != nil {
 		return err
 	}
-	shadowConfigEntry := newReq.ConfigEntryRequest.Entry.(ShadowConfigentry)
+	shadowConfigEntry := newReq.Entry.(ShadowConfigentry)
 	if err := shadowConfigEntry.CheckEnt(); err != nil {
 		return err
 	}
@@ -593,6 +593,14 @@ func MakeShadowConfigEntry(kind, name string) (structs.ConfigEntry, error) {
 	switch kind {
 	case structs.RateLimitIPConfig:
 		return nil, ErrDroppingTenantedReq
+	// inference-gateway is enterprise-only. CE defines the type so API consumers
+	// compile against it, but a CE server never stores the entry, so one replayed
+	// from an enterprise raft log is dropped rather than decoded. Without this the
+	// default arm below returns an error and applyConfigEntryOperation panics.
+	case structs.InferenceGateway:
+		return nil, ErrDroppingTenantedReq
+	case structs.RateLimit:
+		return &ShadowGlobalRateLimitConfigEntry{GlobalRateLimitConfigEntry: &structs.GlobalRateLimitConfigEntry{Name: name}}, nil
 	case structs.ServiceDefaults:
 		return &ShadowServiceConfigEntry{ServiceConfigEntry: &structs.ServiceConfigEntry{Name: name}}, nil
 	case structs.ProxyDefaults:
@@ -669,10 +677,10 @@ func (s ShadowServiceResolverConfigEntry) CheckEnt() error {
 	if err := s.ShadowBase.CheckEnt(); err != nil {
 		return err
 	}
-	if s.ServiceResolverConfigEntry.Redirect != nil && (IsEnterpriseData(s.ServiceResolverConfigEntry.Redirect.Namespace, s.ServiceResolverConfigEntry.Redirect.Partition) || s.ServiceResolverConfigEntry.Redirect.SamenessGroup != "") {
+	if s.Redirect != nil && (IsEnterpriseData(s.Redirect.Namespace, s.Redirect.Partition) || s.Redirect.SamenessGroup != "") {
 		return errIncompatibleTenantedData
 	}
-	for _, failover := range s.ServiceResolverConfigEntry.Failover {
+	for _, failover := range s.Failover {
 		if IsEnterpriseData(failover.Namespace, "") || failover.SamenessGroup != "" {
 			return errIncompatibleTenantedData
 		}
@@ -753,7 +761,14 @@ func (s ShadowServiceRouterConfigEntry) CheckEnt() error {
 	if err := s.ShadowBase.CheckEnt(); err != nil {
 		return err
 	}
-	for _, route := range s.ServiceRouterConfigEntry.Routes {
+	for _, route := range s.Routes {
+		// Destination is optional on a service-router route; a nil Destination
+		// carries no namespace/partition and therefore cannot be enterprise
+		// tenanted data. Guard against a nil dereference here (matches the nil
+		// check used during discovery-chain normalization).
+		if route.Destination == nil {
+			continue
+		}
 		if IsEnterpriseData(route.Destination.Namespace, route.Destination.Partition) {
 			return errIncompatibleTenantedData
 		}
@@ -774,7 +789,7 @@ func (s ShadowServiceSplitterConfigEntry) CheckEnt() error {
 	if err := s.ShadowBase.CheckEnt(); err != nil {
 		return err
 	}
-	for _, split := range s.ServiceSplitterConfigEntry.Splits {
+	for _, split := range s.Splits {
 		if IsEnterpriseData(split.Namespace, split.Partition) {
 			return errIncompatibleTenantedData
 		}
@@ -831,7 +846,22 @@ func (s ShadowTerminatingGatewayConfigEntry) GetRealConfigEntry() structs.Config
 			s.TerminatingGatewayConfigEntry.Services = append(s.TerminatingGatewayConfigEntry.Services, *svc.LinkedService)
 		}
 	}
+	stripEnterpriseOnlyConfigEntryFields(s.TerminatingGatewayConfigEntry)
 	return s.TerminatingGatewayConfigEntry
+}
+
+// stripEnterpriseOnlyConfigEntryFields clears enterprise-only fields that CE carries
+// for API consumers but never stores, so a downgraded CE server keeps the entry
+// without them. Terminating-gateway credential injection is the only such field.
+func stripEnterpriseOnlyConfigEntryFields(entry structs.ConfigEntry) {
+	tgw, ok := entry.(*structs.TerminatingGatewayConfigEntry)
+	if !ok || tgw == nil {
+		return
+	}
+	tgw.CredentialInjection = nil
+	for i := range tgw.Services {
+		tgw.Services[i].Credential = nil
+	}
 }
 
 type ShadowSourceIntention struct {
@@ -869,7 +899,7 @@ type ShadowExportedServicesConfigEntry struct {
 
 func (s ShadowExportedServicesConfigEntry) GetRealConfigEntry() structs.ConfigEntry {
 	services := []structs.ExportedService{}
-	for _, svc := range s.ExportedServicesConfigEntry.Services {
+	for _, svc := range s.Services {
 		if !IsEnterpriseData(svc.Namespace, "") {
 			consumers := []structs.ServiceConsumer{}
 			for _, consumer := range svc.Consumers {
@@ -883,7 +913,7 @@ func (s ShadowExportedServicesConfigEntry) GetRealConfigEntry() structs.ConfigEn
 			services = append(services, svc)
 		}
 	}
-	s.ExportedServicesConfigEntry.Services = services
+	s.Services = services
 	return s.ExportedServicesConfigEntry
 }
 
@@ -1019,4 +1049,13 @@ type ShadowJWTProviderConfigEntry struct {
 
 func (s ShadowJWTProviderConfigEntry) GetRealConfigEntry() structs.ConfigEntry {
 	return s.JWTProviderConfigEntry
+}
+
+type ShadowGlobalRateLimitConfigEntry struct {
+	ShadowBase
+	*structs.GlobalRateLimitConfigEntry
+}
+
+func (s ShadowGlobalRateLimitConfigEntry) GetRealConfigEntry() structs.ConfigEntry {
+	return s.GlobalRateLimitConfigEntry
 }

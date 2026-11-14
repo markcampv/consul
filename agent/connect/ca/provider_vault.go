@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package ca
@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/hashicorp/go-hclog"
 	vaultapi "github.com/hashicorp/vault/api"
-	"github.com/mitchellh/mapstructure"
 
 	"github.com/hashicorp/consul/agent/connect"
 	"github.com/hashicorp/consul/agent/structs"
@@ -390,7 +390,8 @@ func (v *VaultProvider) setupIntermediatePKIPath() error {
 
 	_, err := v.getCA(v.config.IntermediatePKINamespace, v.config.IntermediatePKIPath)
 	if err != nil {
-		if err == ErrBackendNotMounted {
+		switch err {
+		case ErrBackendNotMounted:
 			err := v.mountNamespaced(v.config.IntermediatePKINamespace, v.config.IntermediatePKIPath, &vaultapi.MountInput{
 				Type:        "pki",
 				Description: "intermediate CA backend for Consul Connect",
@@ -403,11 +404,11 @@ func (v *VaultProvider) setupIntermediatePKIPath() error {
 			// if the VaultProvider is ever reconfigured.
 			v.isConsulMountedIntermediate = true
 
-		} else if err == ErrBackendNotInitialized {
+		case ErrBackendNotInitialized:
 			// If this is the first time calling setupIntermediatePKIPath, the backend
 			// will not have been initialized. Since the mount is ready we can suppress
 			// this error.
-		} else {
+		default:
 			return fmt.Errorf("unexpected error while fetching intermediate CA: %w", err)
 		}
 	} else {
@@ -603,7 +604,8 @@ func (v *VaultProvider) GenerateLeafSigningCert() (string, error) {
 	// Sign the CSR with the root backend.
 	intermediate, err := v.writeNamespaced(v.config.RootPKINamespace, v.config.RootPKIPath+"root/sign-intermediate", map[string]interface{}{
 		"csr":            csr,
-		"use_csr_values": true,
+		"use_csr_values": false,
+		"uri_sans":       v.spiffeID.URI().String(),
 		"format":         "pem_bundle",
 		"ttl":            v.config.IntermediateCertTTL.String(),
 	})
@@ -776,7 +778,8 @@ func (v *VaultProvider) SignIntermediate(csr *x509.CertificateRequest) (string, 
 	// Sign the CSR with the root backend.
 	data, err := v.writeNamespaced(v.config.RootPKINamespace, v.config.RootPKIPath+"root/sign-intermediate", map[string]interface{}{
 		"csr":             pemBuf.String(),
-		"use_csr_values":  true,
+		"use_csr_values":  false,
+		"uri_sans":        v.spiffeID.URI().String(),
 		"format":          "pem_bundle",
 		"max_path_length": 0,
 		"ttl":             v.config.IntermediateCertTTL.String(),
@@ -986,10 +989,21 @@ func ParseVaultCAConfig(raw map[string]interface{}, isPrimary bool) (*structs.Va
 		config.IntermediatePKIPath += "/"
 	}
 
-	if err := config.CommonCAProviderConfig.Validate(); err != nil {
+	if err := config.Validate(); err != nil {
 		return nil, err
 	}
 
+	// TokenDirs is injected into raw by CAManager.injectTokenDirs before
+	// Configure is called, so the value here always reflects the immutable
+	// server startup configuration rather than anything an API caller supplied.
+	if config.AuthMethod != nil {
+		if config.AuthMethod.Params == nil {
+			config.AuthMethod.Params = make(map[string]interface{})
+		}
+		if v, ok := raw["TokenDirs"]; ok && v != nil {
+			config.AuthMethod.Params["TokenDirs"] = v
+		}
+	}
 	return &config, nil
 }
 

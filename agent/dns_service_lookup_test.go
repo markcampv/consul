@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package agent
@@ -14,6 +14,8 @@ import (
 	"github.com/miekg/dns"
 	"github.com/stretchr/testify/require"
 
+	"github.com/hashicorp/consul/agent/consul"
+	"github.com/hashicorp/consul/agent/netutil"
 	"github.com/hashicorp/consul/agent/structs"
 	"github.com/hashicorp/consul/api"
 	"github.com/hashicorp/consul/lib"
@@ -520,6 +522,7 @@ func TestDNS_ServiceLookupWithInternalServiceAddress(t *testing.T) {
 }
 
 func TestDNS_ConnectServiceLookup(t *testing.T) {
+	netutil.GetAgentBindAddrFunc = netutil.GetMockGetAgentBindAddrFunc("0.0.0.0")
 	if testing.Short() {
 		t.Skip("too slow for testing.Short")
 	}
@@ -668,6 +671,115 @@ func TestDNS_IngressServiceLookup(t *testing.T) {
 			require.Equal(t, question, cnameRec.Hdr.Name)
 			require.Equal(t, uint32(0), cnameRec.Hdr.Ttl)
 			require.Equal(t, "127.0.0.1", cnameRec.A.String())
+		})
+	}
+}
+
+// TestDNS_APIGatewayServiceLookup verifies that a service fronted by an API
+// gateway resolves at "<service>.api-gateway.consul" to the gateway node, the
+// API gateway analog of TestDNS_IngressServiceLookup.
+//
+// The API gateway mapping is materialized by the controller from the
+// bound-api-gateway entry. To keep this test deterministic and independent of
+// controller timing, the gateway service instance and the
+// api-gateway/http-route/bound-api-gateway config entries are written directly
+// to the server's state store.
+func TestDNS_APIGatewayServiceLookup(t *testing.T) {
+	if testing.Short() {
+		t.Skip("too slow for testing.Short")
+	}
+
+	a := NewTestAgent(t, "")
+	defer a.Shutdown()
+	testrpc.WaitForLeader(t, a.RPC, "dc1")
+
+	server, ok := a.delegate.(*consul.Server)
+	require.True(t, ok)
+	store := server.FSM().State()
+
+	// Monotonically increasing index for direct state-store writes. The exact
+	// values need not align with the live server's Raft index: indexUpdateMaxTxn
+	// never lowers a table's max index, and DNS reads are non-blocking and return
+	// the current table contents regardless.
+	var idx uint64
+	next := func() uint64 { idx++; return idx }
+
+	// Register a node hosting the API gateway service instance. Its node address
+	// is what DNS returns for the fronted service.
+	require.NoError(t, store.EnsureNode(next(), &structs.Node{
+		Node:    "apigw-node",
+		Address: "127.0.0.1",
+	}))
+	require.NoError(t, store.EnsureService(next(), "apigw-node", &structs.NodeService{
+		Kind:    structs.ServiceKindAPIGateway,
+		ID:      "api-gw",
+		Service: "api-gw",
+		Port:    8443,
+	}))
+
+	// Default the mesh protocol to http so the http-route is valid.
+	require.NoError(t, store.EnsureConfigEntry(next(), &structs.ProxyConfigEntry{
+		Kind:   structs.ProxyDefaults,
+		Name:   structs.ProxyConfigGlobal,
+		Config: map[string]interface{}{"protocol": "http"},
+	}))
+
+	// api-gateway config entry: listeners only (no inline service list).
+	require.NoError(t, store.EnsureConfigEntry(next(), &structs.APIGatewayConfigEntry{
+		Kind: structs.APIGateway,
+		Name: "api-gw",
+		Listeners: []structs.APIGatewayListener{
+			{Name: "http-listener", Port: 8443, Protocol: structs.ListenerProtocolHTTP},
+		},
+	}))
+
+	// http-route binding the "web" service to the gateway.
+	require.NoError(t, store.EnsureConfigEntry(next(), &structs.HTTPRouteConfigEntry{
+		Kind:    structs.HTTPRoute,
+		Name:    "web-route",
+		Parents: []structs.ResourceReference{{Kind: structs.APIGateway, Name: "api-gw"}},
+		Rules: []structs.HTTPRouteRule{
+			{Services: []structs.HTTPService{{Name: "web"}}},
+		},
+	}))
+
+	// bound-api-gateway is normally materialized by the API gateway controller;
+	// we write it directly so the gateway<->service mapping (and therefore DNS)
+	// is available deterministically, without depending on controller timing.
+	require.NoError(t, store.EnsureConfigEntry(next(), &structs.BoundAPIGatewayConfigEntry{
+		Kind: structs.BoundAPIGateway,
+		Name: "api-gw",
+		Listeners: []structs.BoundAPIGatewayListener{
+			{
+				Name:   "http-listener",
+				Routes: []structs.ResourceReference{{Kind: structs.HTTPRoute, Name: "web-route"}},
+			},
+		},
+	}))
+
+	// The fronted service should now resolve to the gateway node's address.
+	questions := []string{
+		"web.api-gateway.consul.",
+		"web.api-gateway.dc1.consul.",
+	}
+	for _, question := range questions {
+		t.Run(question, func(t *testing.T) {
+			// retry to tolerate the API gateway controller idempotently
+			// re-reconciling the bound-api-gateway entry we wrote directly.
+			retry.Run(t, func(r *retry.R) {
+				m := new(dns.Msg)
+				m.SetQuestion(question, dns.TypeA)
+
+				c := new(dns.Client)
+				in, _, err := c.Exchange(m, a.DNSAddr())
+				require.NoError(r, err)
+				require.Len(r, in.Answer, 1)
+
+				aRec, ok := in.Answer[0].(*dns.A)
+				require.True(r, ok)
+				require.Equal(r, question, aRec.Hdr.Name)
+				require.Equal(r, "127.0.0.1", aRec.A.String())
+			})
 		})
 	}
 }
@@ -3849,4 +3961,130 @@ func TestDNS_ServiceLookup_SuppressTXT(t *testing.T) {
 		},
 	}
 	require.Equal(t, wantAdditional, in.Extra)
+}
+
+func TestDNS_ServiceLookup_MultiPort_SRV(t *testing.T) {
+	if testing.Short() {
+		t.Skip("too slow for testing.Short")
+	}
+
+	a := NewTestAgent(t, "")
+	defer a.Shutdown()
+	testrpc.WaitForLeader(t, a.RPC, "dc1")
+
+	// Register a multiport node
+	{
+		args := &structs.RegisterRequest{
+			Datacenter: "dc1",
+			Node:       "foo",
+			Address:    "127.0.0.1",
+			Service: &structs.NodeService{
+				Service: "multiport",
+				Ports: structs.ServicePorts{
+					{
+						Name:    "http",
+						Port:    8080,
+						Default: true,
+					},
+					{
+						Name: "metrics",
+						Port: 9090,
+					},
+				},
+			},
+		}
+
+		var out struct{}
+		if err := a.RPC(context.Background(), "Catalog.Register", args, &out); err != nil {
+			t.Fatalf("err: %v", err)
+		}
+	}
+
+	// Register a singleport service
+	{
+		args := &structs.RegisterRequest{
+			Datacenter: "dc1",
+			Node:       "foo",
+			Address:    "127.0.0.1",
+			Service: &structs.NodeService{
+				Service: "singleport",
+				Port:    8080,
+			},
+		}
+
+		var out struct{}
+		if err := a.RPC(context.Background(), "Catalog.Register", args, &out); err != nil {
+			t.Fatalf("err: %v", err)
+		}
+	}
+
+	type testCase struct {
+		dnsQuery     string
+		expectedPort int
+		expectedCode int
+	}
+
+	cases := map[string]testCase{
+		"multiport_no_port_name": {
+			dnsQuery:     "_multiport._tcp.service.consul.",
+			expectedPort: 8080,
+		},
+		"multiport_http_port": {
+			dnsQuery:     "_multiport._tcp.service.http.port.consul.",
+			expectedPort: 8080,
+		},
+		"multiport_metrics_port": {
+			dnsQuery:     "_multiport._tcp.service.metrics.port.consul.",
+			expectedPort: 9090,
+		},
+		"multiport_unknown_port": {
+			dnsQuery:     "_multiport._tcp.service.unknown.port.consul.",
+			expectedCode: dns.RcodeNameError,
+		},
+		"multiport_known_dc_known_port": {
+			dnsQuery:     "_multiport._tcp.service.dc1.dc.http.port.consul.",
+			expectedPort: 8080,
+		},
+		"multiport_known_dc_unknown_port": {
+			dnsQuery:     "_multiport._tcp.service.dc1.dc.unknown.port.consul.",
+			expectedCode: dns.RcodeNameError,
+		},
+		"singleport_no_port_name": {
+			dnsQuery:     "_singleport._tcp.service.consul.",
+			expectedPort: 8080,
+		},
+		"singeport_http_port": {
+			dnsQuery:     "_singleport._tcp.service.http.port.consul.",
+			expectedCode: dns.RcodeNameError,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			m := new(dns.Msg)
+			m.SetQuestion(tc.dnsQuery, dns.TypeSRV)
+
+			c := new(dns.Client)
+			in, _, err := c.Exchange(m, a.DNSAddr())
+			if err != nil {
+				t.Fatalf("err: %v", err)
+			}
+
+			if in.Rcode != tc.expectedCode {
+				t.Fatalf("Expected code %v error, got: %v", tc.expectedCode, in.Rcode)
+			}
+
+			if tc.expectedCode != 0 {
+				return
+			}
+
+			require.NoError(t, err)
+			require.Len(t, in.Answer, 1, "Expected 1 SRV record, got: %#v", in.Answer)
+
+			resp, ok := in.Answer[0].(*dns.SRV)
+			require.True(t, ok, "expected SRV record, got: %T", in.Answer[0])
+
+			require.Equal(t, tc.expectedPort, int(resp.Port))
+		})
+	}
 }

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package proxycfg
@@ -13,10 +13,41 @@ import (
 
 	"github.com/hashicorp/go-hclog"
 
+	"github.com/hashicorp/consul/agent/featuregate"
 	"github.com/hashicorp/consul/agent/structs"
 	"github.com/hashicorp/consul/lib/channels"
 	"github.com/hashicorp/consul/tlsutil"
 )
+
+// featureGateDedup coalesces repeated feature-gate updates while allowing the
+// refresher to exit cleanly when the manager is closed.
+type featureGateDedup struct {
+	ch chan struct{}
+}
+
+// newFeatureGateDedup creates a new dedup struct.
+func newFeatureGateDedup() *featureGateDedup {
+	return &featureGateDedup{ch: make(chan struct{}, 1)}
+}
+
+// signal marks a feature-gate update as pending. If a refresh is already
+// pending, this is a no-op.
+func (d *featureGateDedup) signal() {
+	select {
+	case d.ch <- struct{}{}:
+	default:
+	}
+}
+
+// wait blocks until a feature-gate update is signaled or the manager is closed.
+func (d *featureGateDedup) wait(stopCh <-chan struct{}) bool {
+	select {
+	case <-stopCh:
+		return false
+	case <-d.ch:
+		return true
+	}
+}
 
 // ProxyID is a handle on a proxy service instance being tracked by Manager.
 type ProxyID struct {
@@ -39,6 +70,11 @@ type ProxyID struct {
 // from overwriting each other's registrations.
 type ProxySource string
 
+const (
+	ProxySourceLocal   ProxySource = "local"
+	ProxySourceCatalog ProxySource = "catalog"
+)
+
 // SrcTerminatedChan indicates that the config-source for the proxycfg is no longer running
 // and will stop receiving updates when it is closed.
 type SrcTerminatedChan <-chan struct{}
@@ -56,10 +92,13 @@ type Manager struct {
 
 	rateLimiter *rate.Limiter
 
-	mu         sync.Mutex
-	proxies    map[ProxyID]*state
-	watchers   map[ProxyID]map[uint64]chan *ConfigSnapshot
-	maxWatchID uint64
+	mu               sync.Mutex
+	proxies          map[ProxyID]*state
+	watchers         map[ProxyID]map[uint64]chan *ConfigSnapshot
+	maxWatchID       uint64
+	doneCh           chan struct{}
+	closeOnce        sync.Once
+	featureGateDedup *featureGateDedup
 }
 
 // ManagerConfig holds the required external dependencies for a Manager
@@ -94,6 +133,10 @@ type ManagerConfig struct {
 	//
 	// Defaults to rate.Inf (no rate limit).
 	UpdateRateLimit rate.Limit
+
+	// FeatureGate provides final committed decisions. It is set only on server
+	// agents; nil fails closed and leaves agentful proxy registrations unchanged.
+	FeatureGate featuregate.WatchableGate
 }
 
 // NewManager constructs a Manager.
@@ -107,10 +150,15 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 	}
 
 	m := &Manager{
-		ManagerConfig: cfg,
-		proxies:       make(map[ProxyID]*state),
-		watchers:      make(map[ProxyID]map[uint64]chan *ConfigSnapshot),
-		rateLimiter:   rate.NewLimiter(cfg.UpdateRateLimit, 1),
+		ManagerConfig:    cfg,
+		proxies:          make(map[ProxyID]*state),
+		watchers:         make(map[ProxyID]map[uint64]chan *ConfigSnapshot),
+		rateLimiter:      rate.NewLimiter(cfg.UpdateRateLimit, 1),
+		doneCh:           make(chan struct{}),
+		featureGateDedup: newFeatureGateDedup(),
+	}
+	if cfg.FeatureGate != nil {
+		go m.watchFeatureGates()
 	}
 	return m, nil
 }
@@ -164,18 +212,21 @@ func (m *Manager) Register(id ProxyID, ns *structs.NodeService, source ProxySour
 
 func (m *Manager) register(id ProxyID, ns *structs.NodeService, source ProxySource, token string, overwrite bool) error {
 	state, ok := m.proxies[id]
-	if ok && !state.stoppedRunning() {
-		if state.source != source && !overwrite {
-			// Registered by a different source, leave as-is.
-			return nil
+	if ok {
+		if !state.stoppedRunning() {
+			if state.source != source && !overwrite {
+				// Registered by a different source, leave as-is.
+				return nil
+			}
+
+			if !state.Changed(ns, token) {
+				// No change
+				return nil
+			}
 		}
 
-		if !state.Changed(ns, token) {
-			// No change
-			return nil
-		}
-
-		// We are updating the proxy, close its old state
+		// We are replacing the proxy's state, close the old one. A state that
+		// has stopped running may still hold live watches.
 		state.Close(false)
 	}
 
@@ -186,6 +237,8 @@ func (m *Manager) register(id ProxyID, ns *structs.NodeService, source ProxySour
 		source:                m.Source,
 		dnsConfig:             m.DNSConfig,
 		intentionDefaultAllow: m.IntentionDefaultAllow,
+		featureGate:           m.FeatureGate,
+		agentless:             source == ProxySourceCatalog,
 	}
 	if m.TLSConfigurator != nil {
 		stateConfig.serverSNIFn = m.TLSConfigurator.ServerSNI
@@ -205,6 +258,85 @@ func (m *Manager) register(id ProxyID, ns *structs.NodeService, source ProxySour
 	// Start a goroutine that will wait for changes and broadcast them to watchers.
 	go m.notifyBroadcast(id, state)
 	return nil
+}
+
+func (m *Manager) watchFeatureGates() {
+	go m.featureGateRefresher()
+	for {
+		watch := m.FeatureGate.Watch()
+		select {
+		case <-m.doneCh:
+			return
+		case <-watch:
+			if m.Logger != nil {
+				m.Logger.Debug("feature-gate store updated, refreshing catalog API Gateway snapshots")
+			}
+			m.featureGateDedup.signal()
+		}
+	}
+}
+
+// featureGateRefresher waits for feature-gate update signals and batches them
+// to prevent redundant state channel deliveries when updates arrive faster than
+// they can be consumed.
+func (m *Manager) featureGateRefresher() {
+	for m.featureGateDedup.wait(m.doneCh) {
+		m.refreshFeatureGates()
+	}
+}
+
+// refreshFeatureGates invalidates server-catalog API Gateway snapshots as
+// well as Connect proxy (sidecar) snapshots, which need feature-gate updates
+// regardless of source (e.g. LocalizedDNS applies to all sidecars). Local
+// agent registrations for API Gateway are not affected by any gate and are
+// excluded.
+func (m *Manager) refreshFeatureGates() {
+	m.mu.Lock()
+	states := make([]*state, 0)
+	for _, proxyState := range m.proxies {
+		if proxyState.source == ProxySourceCatalog &&
+			(proxyState.serviceInstance.kind == structs.ServiceKindAPIGateway ||
+				proxyState.serviceInstance.kind == structs.ServiceKindConnectProxy) {
+			states = append(states, proxyState)
+		}
+	}
+	m.mu.Unlock()
+
+	if m.Logger != nil {
+		m.Logger.Debug("feature-gate refresh: dispatching to feature-gate-aware states", "count", len(states))
+	}
+	event := UpdateEvent{CorrelationID: featureGateWatchID}
+	for _, proxyState := range states {
+		m.enqueueFeatureGateUpdate(proxyState, event)
+	}
+}
+
+func (m *Manager) enqueueFeatureGateUpdate(state *state, event UpdateEvent) {
+	select {
+	case <-m.doneCh:
+		return
+	case <-state.doneCh:
+		return
+	case state.ch <- event:
+		if m.Logger != nil {
+			m.Logger.Debug("feature-gate refresh: sent update event", "proxy_id", state.serviceInstance.proxyID)
+		}
+		return
+	default:
+	}
+
+	go func() {
+		select {
+		case <-m.doneCh:
+			return
+		case <-state.doneCh:
+			return
+		case state.ch <- event:
+			if m.Logger != nil {
+				m.Logger.Debug("feature-gate refresh: sent update event", "proxy_id", state.serviceInstance.proxyID)
+			}
+		}
+	}()
 }
 
 // Deregister the given proxy service, but only if it was registered by the same
@@ -343,6 +475,7 @@ func (m *Manager) closeWatchLocked(proxyID ProxyID, watchID uint64) {
 
 // Close removes all state and stops all running goroutines.
 func (m *Manager) Close() error {
+	m.closeOnce.Do(func() { close(m.doneCh) })
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package pbservice
@@ -278,6 +278,54 @@ func NewServiceDefinitionPtrFromStructs(t *structs.ServiceDefinition) *ServiceDe
 	sd := new(ServiceDefinition)
 	ServiceDefinitionFromStructs(t, sd)
 	return sd
+}
+
+// TODO: handle this with mog
+func ServiceAIPtrToStructs(s *ServiceAI) *structs.ServiceAI {
+	if s == nil {
+		return nil
+	}
+	a := new(structs.ServiceAI)
+	ServiceAIToStructs(s, a)
+	return a
+}
+
+// TODO: handle this with mog
+func NewServiceAIPtrFromStructs(t *structs.ServiceAI) *ServiceAI {
+	if t == nil {
+		return nil
+	}
+	a := new(ServiceAI)
+	ServiceAIFromStructs(t, a)
+	return a
+}
+
+// PortsToStructs converts a slice of protobuf Port messages to a slice of agent Port structs.
+func PortsToStructs(s []*ServicePort) structs.ServicePorts {
+	if s == nil {
+		return nil
+	}
+	t := make(structs.ServicePorts, len(s))
+	for i, v := range s {
+		p := new(structs.ServicePort)
+		ServicePortToStructs(v, p)
+		t[i] = *p
+	}
+	return t
+}
+
+// NewPortsFromStructs converts a slice of agent Port structs to a slice of protobuf Port messages.
+func NewPortsFromStructs(t structs.ServicePorts) []*ServicePort {
+	if t == nil {
+		return nil
+	}
+	s := make([]*ServicePort, len(t))
+	for i, v := range t {
+		p := new(ServicePort)
+		ServicePortFromStructs(&v, p)
+		s[i] = p
+	}
+	return s
 }
 
 // TODO: handle this with mog

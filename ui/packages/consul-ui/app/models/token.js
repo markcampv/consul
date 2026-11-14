@@ -1,10 +1,9 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 import Model, { attr } from '@ember-data/model';
-import { computed } from '@ember/object';
 import { MANAGEMENT_ID } from 'consul-ui/models/policy';
 
 export const PRIMARY_KEY = 'uid';
@@ -19,10 +18,12 @@ export default class Token extends Model {
   @attr('string') Partition;
   @attr('string') IDPName;
   @attr('string') SecretID;
+  @attr('string') IDPLogoutURL;
 
   @attr('boolean') Legacy;
   @attr('boolean') Local;
   @attr('string', { defaultValue: () => '' }) Description;
+
   @attr() meta; // {}
 
   @attr({ defaultValue: () => [] }) Policies;
@@ -40,12 +41,10 @@ export default class Token extends Model {
   @attr('string') Rules;
   // End Legacy
 
-  @computed('Policies.[]')
   get isGlobalManagement() {
     return (this.Policies || []).find((item) => item.ID === MANAGEMENT_ID);
   }
 
-  @computed('SecretID')
   get hasSecretID() {
     return this.SecretID !== '' && this.SecretID !== '<hidden>';
   }

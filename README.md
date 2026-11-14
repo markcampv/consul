@@ -1,15 +1,16 @@
 <h1>
-  <img src="./website/public/img/logo.svg" align="left" height="46px" alt="Consul logo"/>
+  <img src="./ui/logo.svg" align="left" height="46px" alt="Consul logo"/>
   <span>Consul</span>
 </h1>
 
 [![License: BUSL-1.1](https://img.shields.io/badge/License-BUSL--1.1-yellow.svg)](LICENSE)
 [![Docker Pulls](https://img.shields.io/docker/pulls/hashicorp/consul.svg)](https://hub.docker.com/r/hashicorp/consul)
 [![Go Report Card](https://goreportcard.com/badge/github.com/hashicorp/consul)](https://goreportcard.com/report/github.com/hashicorp/consul)
+[![Coverage](https://raw.githubusercontent.com/hashicorp/consul/badges/coverage.svg)](https://github.com/hashicorp/consul/actions/workflows/go-tests.yml)
 
 Consul is a distributed, highly available, and data center aware solution to connect and configure applications across dynamic, distributed infrastructure.
 
-* Documentation and Tutorials: [https://developer.hashicopr.com/consul]
+* Documentation and Tutorials: [https://developer.hashicorp.com/consul]
 * Forum: [Discuss](https://discuss.hashicorp.com/c/consul)
 
 Consul provides several key features:
@@ -39,7 +40,7 @@ Consul provides several key features:
 
 Consul runs on Linux, macOS, FreeBSD, Solaris, and Windows and includes an
 optional [browser based UI](https://demo.consul.io). A commercial version
-called [Consul Enterprise](https://developer.hashicorp.com/docs/enterprise) is also
+called [Consul Enterprise](https://developer.hashicorp.com/consul/docs/enterprise) is also
 available.
 
 **Please note**: We take Consul's security and our users' trust very seriously. If you

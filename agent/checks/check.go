@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package checks
@@ -805,7 +805,7 @@ func (c *CheckUDP) check() {
 	}
 	defer conn.Close()
 
-	n, err := fmt.Fprintf(conn, c.Message)
+	n, err := fmt.Fprint(conn, c.Message)
 	if err != nil {
 		c.Logger.Warn("Check socket write failed",
 			"check", c.CheckID.String(),

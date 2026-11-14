@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package structs
@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 
 	"github.com/hashicorp/consul/api"
 	"github.com/hashicorp/consul/lib"
@@ -20,6 +21,14 @@ const (
 var allowedExposeProtocols = map[string]bool{"http": true, "http2": true}
 
 type MeshGatewayMode string
+
+func (m MeshGatewayMode) getHash() uint64 {
+	return hashValue(m)
+}
+
+func (m MeshGatewayMode) appendHash(h *customHasher) {
+	h.addString(string(m))
+}
 
 const (
 	// MeshGatewayModeDefault represents no specific mode and should
@@ -77,6 +86,17 @@ type MeshGatewayConfig struct {
 	Mode MeshGatewayMode `json:",omitempty"`
 }
 
+func (c *MeshGatewayConfig) getHash() uint64 {
+	return hashValue(c)
+}
+
+func (c *MeshGatewayConfig) appendHash(h *customHasher) {
+	if c == nil {
+		return
+	}
+
+	h.addUint64(c.Mode.getHash())
+}
 func (c *MeshGatewayConfig) IsZero() bool {
 	zeroVal := MeshGatewayConfig{}
 	return *c == zeroVal
@@ -139,6 +159,19 @@ type TransparentProxyConfig struct {
 	// The discovery chain is not considered when dialing a service instance directly.
 	// This setting is useful when addressing stateful services, such as a database cluster with a leader node.
 	DialedDirectly bool `json:",omitempty" alias:"dialed_directly"`
+}
+
+func (c *TransparentProxyConfig) getHash() uint64 {
+	return hashValue(c)
+}
+
+func (c *TransparentProxyConfig) appendHash(h *customHasher) {
+	if c == nil {
+		return
+	}
+
+	h.addInt64(int64(c.OutboundListenerPort))
+	h.addBool(c.DialedDirectly)
 }
 
 func (c TransparentProxyConfig) ToAPI() *api.TransparentProxyConfig {
@@ -254,7 +287,7 @@ type ConnectProxyConfig struct {
 
 	// LocalServiceAddress is the address of the local service instance. It is
 	// optional and should only be specified for "side-car" style proxies. It will
-	// default to 127.0.0.1 if the proxy is a "side-car" (DestinationServiceID is
+	// default to 127.0.0.1 or ::1 if the proxy is a "side-car" (DestinationServiceID is
 	// set) but otherwise will be ignored.
 	LocalServiceAddress string `json:",omitempty" alias:"local_service_address"`
 
@@ -263,6 +296,10 @@ type ConnectProxyConfig struct {
 	// to the registered port for the instance if the proxy is a "side-car"
 	// (DestinationServiceID is set) but otherwise will be ignored.
 	LocalServicePort int `json:",omitempty" alias:"local_service_port"`
+
+	// LocalServicePorts are the named ports of the local service instance for
+	// multiport services. LocalServicePort remains the default port.
+	LocalServicePorts ServicePorts `json:",omitempty" alias:"local_service_ports" bexpr:"-"`
 
 	// LocalServiceSocketPath is the socket of the local service instance. It is optional
 	// and should only be specified for "side-car" style proxies.
@@ -296,12 +333,34 @@ type ConnectProxyConfig struct {
 	AccessLogs AccessLogsConfig `json:",omitempty" alias:"access_logs"`
 }
 
+// HasEnvoyEscapeHatchOverride reports whether the proxy's own opaque Config,
+// or any of its Upstreams[*].Config maps, sets an Envoy escape-hatch key (see
+// EnvoyEscapeHatchKeyNames). These keys embed arbitrary Envoy JSON that is
+// delivered verbatim to the sidecar and can introduce code-executing HTTP
+// filters (e.g. envoy_listener_json/envoy_cluster_json set per-upstream), so
+// callers must independently require mesh:write before honoring them.
+func (c *ConnectProxyConfig) HasEnvoyEscapeHatchOverride() bool {
+	if c == nil {
+		return false
+	}
+	if HasEnvoyEscapeHatchKey(c.Config) {
+		return true
+	}
+	for _, u := range c.Upstreams {
+		if HasEnvoyEscapeHatchKey(u.Config) {
+			return true
+		}
+	}
+	return false
+}
+
 func (t *ConnectProxyConfig) UnmarshalJSON(data []byte) (err error) {
 	type Alias ConnectProxyConfig
 	aux := &struct {
 		DestinationServiceNameSnake string                 `json:"destination_service_name"`
 		DestinationServiceIDSnake   string                 `json:"destination_service_id"`
 		LocalServiceAddressSnake    string                 `json:"local_service_address"`
+		LocalServicePortsSnake      ServicePorts           `json:"local_service_ports"`
 		LocalServicePortSnake       int                    `json:"local_service_port"`
 		LocalServiceSocketPathSnake string                 `json:"local_service_socket_path"`
 		MeshGatewaySnake            MeshGatewayConfig      `json:"mesh_gateway"`
@@ -325,6 +384,9 @@ func (t *ConnectProxyConfig) UnmarshalJSON(data []byte) (err error) {
 	}
 	if t.LocalServicePort == 0 {
 		t.LocalServicePort = aux.LocalServicePortSnake
+	}
+	if len(t.LocalServicePorts) == 0 {
+		t.LocalServicePorts = aux.LocalServicePortsSnake
 	}
 	if t.LocalServiceSocketPath == "" {
 		t.LocalServiceSocketPath = aux.LocalServiceSocketPathSnake
@@ -373,7 +435,7 @@ func (c *ConnectProxyConfig) MarshalJSON() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	out.Alias.Config = proxyConfig
+	out.Config = proxyConfig
 
 	if !c.TransparentProxy.IsZero() {
 		out.TransparentProxy = &out.Alias.TransparentProxy
@@ -453,6 +515,7 @@ type Upstream struct {
 	DestinationPartition string `json:",omitempty" alias:"destination_partition"`
 	DestinationPeer      string `json:",omitempty" alias:"destination_peer"`
 	DestinationName      string `alias:"destination_name"`
+	DestinationPort      string `json:",omitempty" alias:"destination_port"`
 
 	// Datacenter that the service discovery request should be run against. Note
 	// for prepared queries, the actual results might be from a different
@@ -460,7 +523,8 @@ type Upstream struct {
 	Datacenter string
 
 	// LocalBindAddress is the ip address a side-car proxy should listen on for
-	// traffic destined for this upstream service. Default if empty is 127.0.0.1.
+	// traffic destined for this upstream service. Default if empty is 127.0.0.1 for IPv4
+	// or ::1 if IPv6 agent bind address.
 	LocalBindAddress string `json:",omitempty" alias:"local_bind_address"`
 
 	// LocalBindPort is the ip address a side-car proxy should listen on for traffic
@@ -500,6 +564,7 @@ func (t *Upstream) UnmarshalJSON(data []byte) (err error) {
 		DestinationNamespaceSnake string `json:"destination_namespace"`
 		DestinationPeerSnake      string `json:"destination_peer"`
 		DestinationNameSnake      string `json:"destination_name"`
+		DestinationPortSnake      string `json:"destination_port"`
 
 		LocalBindAddressSnake string `json:"local_bind_address"`
 		LocalBindPortSnake    int    `json:"local_bind_port"`
@@ -530,6 +595,9 @@ func (t *Upstream) UnmarshalJSON(data []byte) (err error) {
 	}
 	if t.DestinationName == "" {
 		t.DestinationName = aux.DestinationNameSnake
+	}
+	if t.DestinationPort == "" {
+		t.DestinationPort = aux.DestinationPortSnake
 	}
 	if t.LocalBindAddress == "" {
 		t.LocalBindAddress = aux.LocalBindAddressSnake
@@ -590,6 +658,7 @@ func (u *Upstream) ToAPI() api.Upstream {
 		DestinationPartition: u.DestinationPartition,
 		DestinationPeer:      u.DestinationPeer,
 		DestinationName:      u.DestinationName,
+		DestinationPort:      u.DestinationPort,
 		Datacenter:           u.Datacenter,
 		LocalBindAddress:     u.LocalBindAddress,
 		LocalBindPort:        u.LocalBindPort,
@@ -613,6 +682,7 @@ func (u *Upstream) ToKey() UpstreamKey {
 		DestinationNamespace: u.DestinationNamespace,
 		DestinationPeer:      u.DestinationPeer,
 		DestinationName:      u.DestinationName,
+		DestinationPort:      u.DestinationPort,
 		Datacenter:           u.Datacenter,
 	}
 }
@@ -652,14 +722,16 @@ type UpstreamKey struct {
 	DestinationPartition string
 	DestinationNamespace string
 	DestinationPeer      string
+	DestinationPort      string
 	Datacenter           string
 }
 
 func (k UpstreamKey) String() string {
 	return fmt.Sprintf(
-		"[type=%q, name=%q, partition=%q, namespace=%q, peer=%q, datacenter=%q]",
+		"[type=%q, name=%q, port=%q, partition=%q, namespace=%q, peer=%q, datacenter=%q]",
 		k.DestinationType,
 		k.DestinationName,
+		k.DestinationPort,
 		k.DestinationPartition,
 		k.DestinationNamespace,
 		k.DestinationPeer,
@@ -678,6 +750,13 @@ func (us *Upstream) String() string {
 	} else if us.Datacenter != "" {
 		name += "?dc=" + us.Datacenter
 	}
+	if us.DestinationPort != "" {
+		if strings.Contains(name, "?") {
+			name += "&port=" + us.DestinationPort
+		} else {
+			name += "?port=" + us.DestinationPort
+		}
+	}
 
 	// Service is default type so never prefix it.
 	if typ == "" || typ == UpstreamDestTypeService {
@@ -694,6 +773,7 @@ func UpstreamFromAPI(u api.Upstream) Upstream {
 		DestinationNamespace: u.DestinationNamespace,
 		DestinationPeer:      u.DestinationPeer,
 		DestinationName:      u.DestinationName,
+		DestinationPort:      u.DestinationPort,
 		Datacenter:           u.Datacenter,
 		LocalBindAddress:     u.LocalBindAddress,
 		LocalBindPort:        u.LocalBindPort,
@@ -718,9 +798,7 @@ func (e ExposeConfig) Clone() ExposeConfig {
 	e2 := e
 	if len(e.Paths) > 0 {
 		e2.Paths = make([]ExposePath, 0, len(e.Paths))
-		for _, p := range e.Paths {
-			e2.Paths = append(e2.Paths, p)
-		}
+		e2.Paths = append(e2.Paths, e.Paths...)
 	}
 	return e2
 }

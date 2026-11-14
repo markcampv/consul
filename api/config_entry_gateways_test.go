@@ -369,12 +369,24 @@ func TestAPI_ConfigEntries_APIGateway(t *testing.T) {
 		Protocol: "http",
 	}
 
+	// Listener with MaxRequestHeadersKB configured
+	listenerWithHeaders := APIGatewayListener{
+		Name:                "listener-with-headers",
+		Hostname:            "headers.com",
+		Port:                3363,
+		Protocol:            "http",
+		MaxRequestHeadersKB: uintPointer(128),
+	}
+
 	apigw1 := &APIGatewayConfigEntry{
 		Kind: APIGateway,
 		Name: "foo",
 		Meta: map[string]string{
 			"foo": "bar",
 			"gir": "zim",
+		},
+		Defaults: &UpstreamLimits{
+			MaxConnections: intPointer(123),
 		},
 		Listeners: []APIGatewayListener{listener1},
 	}
@@ -385,6 +397,13 @@ func TestAPI_ConfigEntries_APIGateway(t *testing.T) {
 		Listeners: []APIGatewayListener{listener2},
 	}
 
+	// API Gateway with MaxRequestHeadersKB
+	apigw3 := &APIGatewayConfigEntry{
+		Kind:      APIGateway,
+		Name:      "headers-gw",
+		Listeners: []APIGatewayListener{listenerWithHeaders},
+	}
+
 	// set it
 	_, wm, err := configEntries.Set(apigw1, nil)
 	require.NoError(t, err)
@@ -393,6 +412,12 @@ func TestAPI_ConfigEntries_APIGateway(t *testing.T) {
 
 	// also set the second one
 	_, wm, err = configEntries.Set(apigw2, nil)
+	require.NoError(t, err)
+	require.NotNil(t, wm)
+	require.NotEqual(t, 0, wm.RequestTime)
+
+	// set the third one with MaxRequestHeadersKB
+	_, wm, err = configEntries.Set(apigw3, nil)
 	require.NoError(t, err)
 	require.NotNil(t, wm)
 	require.NotEqual(t, 0, wm.RequestTime)
@@ -410,6 +435,8 @@ func TestAPI_ConfigEntries_APIGateway(t *testing.T) {
 	require.Equal(t, apigw1.Name, readGW.Name)
 	require.Equal(t, apigw1.Meta, readGW.Meta)
 	require.Equal(t, apigw1.Meta, readGW.GetMeta())
+	require.NotNil(t, readGW.Defaults)
+	require.Equal(t, *apigw1.Defaults.MaxConnections, *readGW.Defaults.MaxConnections)
 
 	// update it
 	apigw1.Listeners = []APIGatewayListener{
@@ -460,7 +487,7 @@ func TestAPI_ConfigEntries_APIGateway(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, qm)
 	require.NotEqual(t, 0, qm.RequestTime)
-	require.Len(t, entries, 2)
+	require.Len(t, entries, 3)
 
 	for _, entry = range entries {
 		switch entry.GetName() {
@@ -472,6 +499,8 @@ func TestAPI_ConfigEntries_APIGateway(t *testing.T) {
 			require.Equal(t, apigw1.Kind, readGW.Kind)
 			require.Equal(t, apigw1.Name, readGW.Name)
 			require.Len(t, readGW.Listeners, 2)
+			require.NotNil(t, readGW.Defaults)
+			require.Equal(t, *apigw1.Defaults.MaxConnections, *readGW.Defaults.MaxConnections)
 
 			require.Equal(t, apigw1.Listeners, readGW.Listeners)
 		case "bar":
@@ -482,11 +511,32 @@ func TestAPI_ConfigEntries_APIGateway(t *testing.T) {
 			require.Len(t, readGW.Listeners, 2)
 
 			require.Equal(t, apigw2.Listeners, readGW.Listeners)
+		case "headers-gw":
+			readGW, ok = entry.(*APIGatewayConfigEntry)
+			require.True(t, ok)
+			require.Equal(t, apigw3.Kind, readGW.Kind)
+			require.Equal(t, apigw3.Name, readGW.Name)
+			require.Len(t, readGW.Listeners, 1)
+
+			// Verify MaxRequestHeadersKB is properly handled
+			require.Equal(t, apigw3.Listeners, readGW.Listeners)
+			require.NotNil(t, readGW.Listeners[0].MaxRequestHeadersKB)
+			require.Equal(t, uint32(128), *readGW.Listeners[0].MaxRequestHeadersKB)
 		}
 	}
 
-	// delete it
+	// delete them
 	wm, err = configEntries.Delete(APIGateway, "foo", nil)
+	require.NoError(t, err)
+	require.NotNil(t, wm)
+	require.NotEqual(t, 0, wm.RequestTime)
+
+	wm, err = configEntries.Delete(APIGateway, "bar", nil)
+	require.NoError(t, err)
+	require.NotNil(t, wm)
+	require.NotEqual(t, 0, wm.RequestTime)
+
+	wm, err = configEntries.Delete(APIGateway, "headers-gw", nil)
 	require.NoError(t, err)
 	require.NotNil(t, wm)
 	require.NotEqual(t, 0, wm.RequestTime)
@@ -494,4 +544,12 @@ func TestAPI_ConfigEntries_APIGateway(t *testing.T) {
 	// verify deletion
 	_, _, err = configEntries.Get(APIGateway, "foo", nil)
 	require.Error(t, err)
+
+	_, _, err = configEntries.Get(APIGateway, "headers-gw", nil)
+	require.Error(t, err)
+}
+
+// Helper function to create uint32 pointers for testing
+func uintPointer(u uint32) *uint32 {
+	return &u
 }

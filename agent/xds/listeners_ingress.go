@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package xds
@@ -108,18 +108,22 @@ func (s *ResourceGenerator) makeIngressGatewayListeners(address string, cfgSnap 
 
 			listener := makeListener(listenerOpts)
 
+			proxyCfg := cfgSnap.GetProxyConfig(s.Logger)
+			maxRequestHeadersKb := proxyCfg.MaxRequestHeadersKB
+
 			filterOpts := listenerFilterOpts{
-				useRDS:           true,
-				fetchTimeoutRDS:  cfgSnap.GetXDSCommonConfig(s.Logger).GetXDSFetchTimeout(),
-				protocol:         listenerKey.Protocol,
-				filterName:       listenerKey.RouteName(),
-				routeName:        listenerKey.RouteName(),
-				cluster:          "",
-				statPrefix:       "ingress_upstream_",
-				routePath:        "",
-				httpAuthzFilters: nil,
-				accessLogs:       &cfgSnap.Proxy.AccessLogs,
-				logger:           s.Logger,
+				useRDS:              true,
+				fetchTimeoutRDS:     cfgSnap.GetXDSCommonConfig(s.Logger).GetXDSFetchTimeout(),
+				protocol:            listenerKey.Protocol,
+				filterName:          listenerKey.RouteName(),
+				routeName:           listenerKey.RouteName(),
+				cluster:             "",
+				statPrefix:          "ingress_upstream_",
+				routePath:           "",
+				httpAuthzFilters:    nil,
+				accessLogs:          &cfgSnap.Proxy.AccessLogs,
+				logger:              s.Logger,
+				maxRequestHeadersKb: maxRequestHeadersKb,
 			}
 
 			// Generate any filter chains needed for services with custom TLS certs
@@ -388,7 +392,7 @@ func makeSDSOverrideFilterChains(cfgSnap *proxycfg.ConfigSnapshot,
 }
 
 func makeTLSParametersFromGatewayTLSConfig(tlsCfg structs.GatewayTLSConfig) *envoy_tls_v3.TlsParameters {
-	return makeTLSParametersFromTLSConfig(tlsCfg.TLSMinVersion, tlsCfg.TLSMaxVersion, tlsCfg.CipherSuites)
+	return makeTLSParametersFromTLSConfig(tlsCfg.TLSMinVersion, tlsCfg.TLSMaxVersion, tlsCfg.CipherSuites, nil)
 }
 
 func makeFileSystemTLSContextFromGatewayTLSConfig(tlsCfg structs.GatewayTLSConfig, cert *structs.FileSystemCertificateConfigEntry) *envoy_tls_v3.CommonTlsContext {

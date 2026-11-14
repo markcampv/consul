@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -7,11 +7,16 @@ import Component from '@ember/component';
 import { inject as service } from '@ember/service';
 import { set } from '@ember/object';
 
-import Slotted from 'block-slots';
-
-export default Component.extend(Slotted, {
+export default Component.extend({
   tagName: '',
   dom: service('dom'),
+
+  formModalActive: false,
+
+  get modalRoot() {
+    return document.body;
+  },
+
   init: function () {
     this._super(...arguments);
     this.guid = this.dom.guid(this);
@@ -24,8 +29,14 @@ export default Component.extend(Slotted, {
     this._super(...arguments);
     this.menu.removeSubmenu(this.guid);
   },
-  willRender: function () {
-    this._super(...arguments);
-    set(this, 'hasConfirmation', this._isRegistered('confirmation'));
+
+  actions: {
+    activateModal(modalName) {
+      set(this, modalName, true);
+    },
+
+    deactivateModal(modalName) {
+      set(this, modalName, false);
+    },
   },
 });

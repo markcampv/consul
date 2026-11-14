@@ -1,0 +1,74 @@
+# Consul::Policy::Form
+
+A presentational component that renders the Policy create/edit form and the
+action buttons (Save / Cancel / Delete). It wraps `Consul::Policy::Fieldsets`,
+conditionally loads tokens that use the policy, and delegates create/update/
+cancel/delete behaviour to closure actions supplied by the caller.
+
+## Usage
+
+```hbs
+<Consul::Policy::Form
+  @item={{item}}
+  @create={{create}}
+  @dc={{dc}}
+  @partition={{partition}}
+  @nspace={{nspace}}
+  @id={{id}}
+  @items={{items}}
+  @onCreate={{fn this.onCreate item}}
+  @onUpdate={{fn this.onUpdate item}}
+  @onCancel={{fn this.onCancel item}}
+  @onDelete={{fn this.onDelete item}}
+  @onItemsChange={{action (mut items) value="data"}}
+  @onChange={{action "change"}}
+/>
+```
+
+## Arguments
+
+| Argument | Type | Required | Description |
+|---|---:|:---:|---|
+| `@item` | object | yes | Policy model / changeset. |
+| `@create` | boolean | no | True when rendering the create flow. |
+| `@dc` | string | no | Datacenter identifier used to build DataSource URIs. |
+| `@partition` | string | no | Current partition. |
+| `@nspace` | string | no | Current namespace. |
+| `@id` | string | no | Policy ID (used to fetch associated tokens). |
+| `@items` | array | no | Tokens currently associated with the policy (kept in sync via `@onItemsChange`). |
+| `@onCreate` | function | no | Invoked when Save is clicked in create mode. |
+| `@onUpdate` | function | no | Invoked when Save is clicked in edit mode. |
+| `@onCancel` | function | no | Invoked when Cancel is clicked. |
+| `@onDelete` | function | no | Invoked after the user confirms deletion. |
+| `@onItemsChange` | function | no | Handler for the DataSource `onchange` event; recommended: `action (mut items) value="data"`. |
+| `@onChange` | function | no | Forwarded to `Consul::Policy::Fieldsets` for all field input events. |
+
+## Behaviour / Notes
+
+- `Consul::Policy::Form` owns only the **delete modal** state
+  (`showDeleteModal`). Field state, `isScoped` toggle, and datacenter list are
+  owned by `Consul::Policy::Fieldsets`.
+- When not in create mode and the policy has an ID, the component loads related
+  tokens via DataSource `/${partition}/${nspace}/${dc}/tokens/for-policy/${id}`.
+  Pass `@onItemsChange` to keep caller state in sync.
+- **Save button**:
+  - `@create` is true and caller has `create tokens` permission → invokes `@onCreate`.
+  - Otherwise → invokes `@onUpdate` if the caller has `write policy` permission.
+- **Delete button** opens an `Hds::Modal` confirmation:
+  - If the policy has associated tokens the modal lists them before confirming.
+  - Actual delete is triggered by calling `@onDelete` (via `this.confirmDelete`).
+- **Action layout**: Save / Cancel (`Hds::ButtonSet`) are on the left; Delete
+  (`Hds::Button @color="critical"`) is on the right, matching the Figma design.
+
+## Sub-components
+
+- `Consul::Policy::Fieldsets` — HDS form fields (Policy ID, Name, Description,
+  Rules / CodeEditor, Valid Datacenters toggle + checkbox list).
+
+## See
+
+- Component template: [`./index.hbs`](./index.hbs)
+- Component class: [`./index.js`](./index.js)
+- Form layout styles: [`./index.scss`](./index.scss)
+- Fieldsets template: [`../fieldsets/index.hbs`](../fieldsets/index.hbs)
+- Fieldsets class: [`../fieldsets/index.js`](../fieldsets/index.js)

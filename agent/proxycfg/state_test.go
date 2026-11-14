@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package proxycfg
@@ -10,9 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hashicorp/go-hclog"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/time/rate"
+
+	"github.com/hashicorp/go-hclog"
 
 	"github.com/hashicorp/consul/acl"
 	cachetype "github.com/hashicorp/consul/agent/cache-types"
@@ -26,7 +27,7 @@ import (
 	"github.com/hashicorp/consul/sdk/testutil"
 )
 
-func TestStateChanged(t *testing.T) {
+func TestStateChangedConnectProxy(t *testing.T) {
 	tests := []struct {
 		name   string
 		ns     *structs.NodeService
@@ -104,6 +105,131 @@ func TestStateChanged(t *testing.T) {
 			token: "foo",
 			mutate: func(ns structs.NodeService, token string) (*structs.NodeService, string) {
 				ns.Proxy.Upstreams = nil
+				return &ns, token
+			},
+			want: true,
+		},
+		{
+			name:  "different proxy mesh gateway mode",
+			ns:    structs.TestNodeServiceAPIGateway(t),
+			token: "foo",
+			mutate: func(ns structs.NodeService, token string) (*structs.NodeService, string) {
+				ns.Proxy.MeshGateway.Mode = structs.MeshGatewayModeLocal
+				return &ns, token
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			proxyID := ProxyID{ServiceID: tt.ns.CompoundServiceID()}
+			state, err := newState(proxyID, tt.ns, testSource, tt.token, stateConfig{logger: hclog.New(nil)}, rate.NewLimiter(rate.Inf, 1))
+			require.NoError(t, err)
+			otherNS, otherToken := tt.mutate(*tt.ns, tt.token)
+			require.Equal(t, tt.want, state.Changed(otherNS, otherToken))
+		})
+	}
+}
+
+func TestStateChangedAPIGateway(t *testing.T) {
+	tests := []struct {
+		name   string
+		ns     *structs.NodeService
+		token  string
+		mutate func(ns structs.NodeService, token string) (*structs.NodeService, string)
+		want   bool
+	}{
+		{
+			name: "nil node service",
+			ns:   structs.TestNodeServiceAPIGateway(t),
+			mutate: func(ns structs.NodeService, token string) (*structs.NodeService, string) {
+				return nil, token
+			},
+			want: true,
+		},
+		{
+			name: "same service",
+			ns:   structs.TestNodeServiceAPIGateway(t),
+			mutate: func(ns structs.NodeService, token string) (*structs.NodeService, string) {
+				return &ns, token
+			}, want: false,
+		},
+		{
+			name:  "same service, different token",
+			ns:    structs.TestNodeServiceAPIGateway(t),
+			token: "foo",
+			mutate: func(ns structs.NodeService, token string) (*structs.NodeService, string) {
+				return &ns, "bar"
+			},
+			want: true,
+		},
+		{
+			name:  "different address",
+			ns:    structs.TestNodeServiceAPIGateway(t),
+			token: "foo",
+			mutate: func(ns structs.NodeService, token string) (*structs.NodeService, string) {
+				ns.Address = "10.10.10.10"
+				return &ns, token
+			},
+			want: true,
+		},
+		{
+			name:  "different port",
+			ns:    structs.TestNodeServiceAPIGateway(t),
+			token: "foo",
+			mutate: func(ns structs.NodeService, token string) (*structs.NodeService, string) {
+				ns.Port = 12345
+				return &ns, token
+			},
+			want: true,
+		},
+		{
+			name:  "different service kind",
+			ns:    structs.TestNodeServiceAPIGateway(t),
+			token: "foo",
+			mutate: func(ns structs.NodeService, token string) (*structs.NodeService, string) {
+				ns.Kind = ""
+				return &ns, token
+			},
+			want: true,
+		},
+		{
+			name:  "different proxy target",
+			ns:    structs.TestNodeServiceAPIGateway(t),
+			token: "foo",
+			mutate: func(ns structs.NodeService, token string) (*structs.NodeService, string) {
+				ns.Proxy.DestinationServiceName = "badger"
+				return &ns, token
+			},
+			want: true,
+		},
+		{
+			name:  "different proxy upstreams",
+			ns:    structs.TestNodeServiceAPIGateway(t),
+			token: "foo",
+			mutate: func(ns structs.NodeService, token string) (*structs.NodeService, string) {
+				ns.Proxy.Upstreams = nil
+				return &ns, token
+			},
+			want: true,
+		},
+		{
+			name:  "different mesh gateway mode (local)",
+			ns:    structs.TestNodeServiceAPIGateway(t),
+			token: "foo",
+			mutate: func(ns structs.NodeService, token string) (*structs.NodeService, string) {
+				ns.Proxy.MeshGateway.Mode = structs.MeshGatewayModeLocal
+				return &ns, token
+			},
+			want: true,
+		},
+		{
+			name:  "different mesh gateway mode (remote)",
+			ns:    structs.TestNodeServiceAPIGateway(t),
+			token: "foo",
+			mutate: func(ns structs.NodeService, token string) (*structs.NodeService, string) {
+				ns.Proxy.MeshGateway.Mode = structs.MeshGatewayModeRemote
 				return &ns, token
 			},
 			want: true,
@@ -371,7 +497,7 @@ func genVerifyServiceSpecificPeeredRequest(expectedService, expectedFilter, expe
 		require.Equal(t, expectedDatacenter, reqReal.Datacenter)
 		require.Equal(t, expectedPeer, reqReal.PeerName)
 		require.Equal(t, expectedService, reqReal.ServiceName)
-		require.Equal(t, expectedFilter, reqReal.QueryOptions.Filter)
+		require.Equal(t, expectedFilter, reqReal.Filter)
 		require.Equal(t, connect, reqReal.Connect)
 	}
 }
@@ -774,8 +900,8 @@ func TestState_WatchesAndUpdates(t *testing.T) {
 				require.Len(t, snap.ConnectProxy.WatchedServiceChecks, 0, "%+v", snap.ConnectProxy.WatchedServiceChecks)
 				require.Len(t, snap.ConnectProxy.PreparedQueryEndpoints, 0, "%+v", snap.ConnectProxy.PreparedQueryEndpoints)
 
-				require.Equal(t, 1, snap.ConnectProxy.ConfigSnapshotUpstreams.PeerUpstreamEndpoints.Len())
-				require.Equal(t, 1, snap.ConnectProxy.ConfigSnapshotUpstreams.UpstreamPeerTrustBundles.Len())
+				require.Equal(t, 1, snap.ConnectProxy.PeerUpstreamEndpoints.Len())
+				require.Equal(t, 1, snap.ConnectProxy.UpstreamPeerTrustBundles.Len())
 
 				require.True(t, snap.ConnectProxy.IntentionsSet)
 				require.Equal(t, ixnMatch, snap.ConnectProxy.Intentions)
@@ -814,8 +940,8 @@ func TestState_WatchesAndUpdates(t *testing.T) {
 				require.Len(t, snap.ConnectProxy.WatchedServiceChecks, 0, "%+v", snap.ConnectProxy.WatchedServiceChecks)
 				require.Len(t, snap.ConnectProxy.PreparedQueryEndpoints, 0, "%+v", snap.ConnectProxy.PreparedQueryEndpoints)
 
-				require.Equal(t, 1, snap.ConnectProxy.ConfigSnapshotUpstreams.PeerUpstreamEndpoints.Len())
-				require.Equal(t, 1, snap.ConnectProxy.ConfigSnapshotUpstreams.UpstreamPeerTrustBundles.Len())
+				require.Equal(t, 1, snap.ConnectProxy.PeerUpstreamEndpoints.Len())
+				require.Equal(t, 1, snap.ConnectProxy.UpstreamPeerTrustBundles.Len())
 
 				require.True(t, snap.ConnectProxy.IntentionsSet)
 				require.Equal(t, ixnMatch, snap.ConnectProxy.Intentions)
@@ -1066,8 +1192,8 @@ func TestState_WatchesAndUpdates(t *testing.T) {
 				require.Len(t, snap.ConnectProxy.WatchedServiceChecks, 0, "%+v", snap.ConnectProxy.WatchedServiceChecks)
 				require.Len(t, snap.ConnectProxy.PreparedQueryEndpoints, 0, "%+v", snap.ConnectProxy.PreparedQueryEndpoints)
 
-				require.Equal(t, 1, snap.ConnectProxy.ConfigSnapshotUpstreams.PeerUpstreamEndpoints.Len())
-				require.Equal(t, 1, snap.ConnectProxy.ConfigSnapshotUpstreams.UpstreamPeerTrustBundles.Len())
+				require.Equal(t, 1, snap.ConnectProxy.PeerUpstreamEndpoints.Len())
+				require.Equal(t, 1, snap.ConnectProxy.UpstreamPeerTrustBundles.Len())
 
 				require.True(t, snap.ConnectProxy.IntentionsSet)
 				require.Equal(t, ixnMatch, snap.ConnectProxy.Intentions)
@@ -1099,8 +1225,8 @@ func TestState_WatchesAndUpdates(t *testing.T) {
 				require.Len(t, snap.ConnectProxy.WatchedServiceChecks, 0, "%+v", snap.ConnectProxy.WatchedServiceChecks)
 				require.Len(t, snap.ConnectProxy.PreparedQueryEndpoints, 0, "%+v", snap.ConnectProxy.PreparedQueryEndpoints)
 
-				require.Equal(t, 1, snap.ConnectProxy.ConfigSnapshotUpstreams.PeerUpstreamEndpoints.Len())
-				require.Equal(t, 1, snap.ConnectProxy.ConfigSnapshotUpstreams.UpstreamPeerTrustBundles.Len())
+				require.Equal(t, 1, snap.ConnectProxy.PeerUpstreamEndpoints.Len())
+				require.Equal(t, 1, snap.ConnectProxy.UpstreamPeerTrustBundles.Len())
 
 				require.True(t, snap.ConnectProxy.IntentionsSet)
 				require.Equal(t, ixnMatch, snap.ConnectProxy.Intentions)
@@ -1365,7 +1491,7 @@ func TestState_WatchesAndUpdates(t *testing.T) {
 									Address:    "10.30.1.1",
 									Datacenter: "dc4",
 								},
-								Service: structs.TestNodeServiceMeshGatewayWithAddrs(t,
+								Service: structs.TestNodeServiceMeshGatewayWithAddrs(
 									"10.30.1.1", 8443,
 									structs.ServiceAddress{Address: "10.0.1.1", Port: 8443},
 									structs.ServiceAddress{Address: "123.us-west-2.elb.notaws.com", Port: 443}),
@@ -1377,7 +1503,7 @@ func TestState_WatchesAndUpdates(t *testing.T) {
 									Address:    "10.30.1.2",
 									Datacenter: "dc4",
 								},
-								Service: structs.TestNodeServiceMeshGatewayWithAddrs(t,
+								Service: structs.TestNodeServiceMeshGatewayWithAddrs(
 									"10.30.1.2", 8443,
 									structs.ServiceAddress{Address: "10.30.1.2", Port: 8443},
 									structs.ServiceAddress{Address: "456.us-west-2.elb.notaws.com", Port: 443}),
@@ -1411,7 +1537,7 @@ func TestState_WatchesAndUpdates(t *testing.T) {
 									Address:    "10.30.1.1",
 									Datacenter: "dc5",
 								},
-								Service: structs.TestNodeServiceMeshGatewayWithAddrs(t,
+								Service: structs.TestNodeServiceMeshGatewayWithAddrs(
 									"10.30.1.1", 8443,
 									structs.ServiceAddress{Address: "10.0.1.1", Port: 8443},
 									structs.ServiceAddress{Address: "123.us-west-2.elb.notaws.com", Port: 443}),
@@ -1423,7 +1549,7 @@ func TestState_WatchesAndUpdates(t *testing.T) {
 									Address:    "10.30.1.2",
 									Datacenter: "dc5",
 								},
-								Service: structs.TestNodeServiceMeshGatewayWithAddrs(t,
+								Service: structs.TestNodeServiceMeshGatewayWithAddrs(
 									"10.30.1.2", 8443,
 									structs.ServiceAddress{Address: "10.30.1.2", Port: 8443},
 									structs.ServiceAddress{Address: "456.us-west-2.elb.notaws.com", Port: 443}),
@@ -4163,7 +4289,7 @@ func Test_hostnameEndpoints(t *testing.T) {
 						Node:       "mesh-gateway",
 						Datacenter: "dc1",
 					},
-					Service: structs.TestNodeServiceMeshGatewayWithAddrs(t,
+					Service: structs.TestNodeServiceMeshGatewayWithAddrs(
 						"10.0.1.1", 8443,
 						structs.ServiceAddress{},
 						structs.ServiceAddress{Address: "123.us-west-1.elb.notaws.com", Port: 443}),
@@ -4173,7 +4299,7 @@ func Test_hostnameEndpoints(t *testing.T) {
 						Node:       "mesh-gateway",
 						Datacenter: "dc1",
 					},
-					Service: structs.TestNodeServiceMeshGatewayWithAddrs(t,
+					Service: structs.TestNodeServiceMeshGatewayWithAddrs(
 						"10.0.2.2", 8443,
 						structs.ServiceAddress{},
 						structs.ServiceAddress{Address: "123.us-west-2.elb.notaws.com", Port: 443}),
@@ -4190,7 +4316,7 @@ func Test_hostnameEndpoints(t *testing.T) {
 						Node:       "mesh-gateway",
 						Datacenter: "dc1",
 					},
-					Service: structs.TestNodeServiceMeshGatewayWithAddrs(t,
+					Service: structs.TestNodeServiceMeshGatewayWithAddrs(
 						"gateway.mydomain", 8443,
 						structs.ServiceAddress{},
 						structs.ServiceAddress{Address: "123.us-west-1.elb.notaws.com", Port: 443}),
@@ -4200,7 +4326,7 @@ func Test_hostnameEndpoints(t *testing.T) {
 						Node:       "mesh-gateway",
 						Datacenter: "dc1",
 					},
-					Service: structs.TestNodeServiceMeshGatewayWithAddrs(t,
+					Service: structs.TestNodeServiceMeshGatewayWithAddrs(
 						"10.0.2.2", 8443,
 						structs.ServiceAddress{},
 						structs.ServiceAddress{Address: "123.us-west-2.elb.notaws.com", Port: 443}),
@@ -4212,7 +4338,7 @@ func Test_hostnameEndpoints(t *testing.T) {
 						Node:       "mesh-gateway",
 						Datacenter: "dc1",
 					},
-					Service: structs.TestNodeServiceMeshGatewayWithAddrs(t,
+					Service: structs.TestNodeServiceMeshGatewayWithAddrs(
 						"gateway.mydomain", 8443,
 						structs.ServiceAddress{},
 						structs.ServiceAddress{Address: "123.us-west-1.elb.notaws.com", Port: 443}),
@@ -4228,7 +4354,7 @@ func Test_hostnameEndpoints(t *testing.T) {
 						Node:       "mesh-gateway",
 						Datacenter: "dc1",
 					},
-					Service: structs.TestNodeServiceMeshGatewayWithAddrs(t,
+					Service: structs.TestNodeServiceMeshGatewayWithAddrs(
 						"gateway.mydomain", 8443,
 						structs.ServiceAddress{},
 						structs.ServiceAddress{Address: "8.8.8.8", Port: 443}),
@@ -4238,7 +4364,7 @@ func Test_hostnameEndpoints(t *testing.T) {
 						Node:       "mesh-gateway",
 						Datacenter: "dc1",
 					},
-					Service: structs.TestNodeServiceMeshGatewayWithAddrs(t,
+					Service: structs.TestNodeServiceMeshGatewayWithAddrs(
 						"10.0.2.2", 8443,
 						structs.ServiceAddress{},
 						structs.ServiceAddress{Address: "123.us-west-2.elb.notaws.com", Port: 443}),
@@ -4250,7 +4376,7 @@ func Test_hostnameEndpoints(t *testing.T) {
 						Node:       "mesh-gateway",
 						Datacenter: "dc1",
 					},
-					Service: structs.TestNodeServiceMeshGatewayWithAddrs(t,
+					Service: structs.TestNodeServiceMeshGatewayWithAddrs(
 						"10.0.2.2", 8443,
 						structs.ServiceAddress{},
 						structs.ServiceAddress{Address: "123.us-west-2.elb.notaws.com", Port: 443}),

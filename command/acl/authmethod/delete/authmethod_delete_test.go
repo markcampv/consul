@@ -1,10 +1,9 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package authmethoddelete
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 
@@ -117,7 +116,7 @@ func TestAuthMethodDeleteCommand(t *testing.T) {
 		require.Empty(t, ui.ErrorWriter.String())
 
 		output := ui.OutputWriter.String()
-		require.Contains(t, output, fmt.Sprintf("deleted successfully"))
+		require.Contains(t, output, "deleted successfully")
 		require.Contains(t, output, name)
 
 		method, _, err := client.ACL().AuthMethodRead(

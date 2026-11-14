@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package catalog
@@ -19,7 +19,7 @@ import (
 	"github.com/hashicorp/consul/agent/structs"
 )
 
-const source proxycfg.ProxySource = "catalog"
+const source proxycfg.ProxySource = proxycfg.ProxySourceCatalog
 
 // ConfigSource wraps a proxycfg.Manager to register services with it, from the
 // catalog, when they are requested by the xDS server.
@@ -130,7 +130,7 @@ func (m *ConfigSource) startSync(
 	proxyID proxycfg.ProxyID,
 ) error {
 	logger := m.Logger.With(
-		"proxy_service_id", proxyID.ServiceID.String(),
+		"proxy_service_id", proxyID.String(),
 		"node", proxyID.NodeName,
 	)
 

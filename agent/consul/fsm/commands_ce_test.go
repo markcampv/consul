@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package fsm
@@ -13,14 +13,22 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitchellh/mapstructure"
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 
+	goMetrics "github.com/hashicorp/go-metrics"
+	"github.com/hashicorp/go-raftchunking"
+	raftchunkingtypes "github.com/hashicorp/go-raftchunking/types"
+	"github.com/hashicorp/go-uuid"
+	"github.com/hashicorp/raft"
+	"github.com/hashicorp/serf/coordinate"
+
 	"github.com/hashicorp/consul/agent/connect"
 	"github.com/hashicorp/consul/agent/consul/state"
+	"github.com/hashicorp/consul/agent/metrics"
 	"github.com/hashicorp/consul/agent/structs"
 	"github.com/hashicorp/consul/api"
 	"github.com/hashicorp/consul/internal/storage"
@@ -29,11 +37,6 @@ import (
 	"github.com/hashicorp/consul/proto/private/prototest"
 	"github.com/hashicorp/consul/sdk/testutil"
 	"github.com/hashicorp/consul/types"
-	"github.com/hashicorp/go-raftchunking"
-	raftchunkingtypes "github.com/hashicorp/go-raftchunking/types"
-	"github.com/hashicorp/go-uuid"
-	"github.com/hashicorp/raft"
-	"github.com/hashicorp/serf/coordinate"
 )
 
 func generateUUID() (ret string) {
@@ -1109,6 +1112,71 @@ func TestFSM_Autopilot(t *testing.T) {
 	}
 }
 
+func TestFSM_FeatureGateUpdate(t *testing.T) {
+	t.Parallel()
+	fsm, err := New(nil, testutil.Logger(t))
+	require.NoError(t, err)
+
+	req := structs.FeatureGateUpdateRequest{
+		Policy: &structs.FeatureGatePolicy{Settings: map[string]structs.FeatureGateSetting{
+			"test-feature": {Enabled: true, Source: structs.FeatureGateSourceOperator},
+		}},
+		Status: &structs.FeatureGateStatus{
+			RegistryDigest: "digest",
+			Features: map[string]structs.ResolvedFeatureGate{
+				"test-feature": {DesiredEnabled: true, EffectiveEnabled: true, Eligible: true},
+			},
+		},
+	}
+	buf, err := structs.Encode(structs.FeatureGateRequestType|structs.IgnoreUnknownTypeFlag, req)
+	require.NoError(t, err)
+	require.Equal(t, true, fsm.Apply(makeLog(buf)))
+
+	_, policy, status, err := fsm.state.FeatureGatePolicyAndStatus(nil)
+	require.NoError(t, err)
+	require.True(t, policy.Settings["test-feature"].Enabled)
+	require.True(t, status.Features["test-feature"].EffectiveEnabled)
+}
+
+func TestFSM_FeatureGateUpdate_EmitsMetrics(t *testing.T) {
+	sink := metrics.TestSetupMetrics(t, "")
+	fsm, err := New(nil, testutil.Logger(t))
+	require.NoError(t, err)
+
+	req := structs.FeatureGateUpdateRequest{
+		Policy: &structs.FeatureGatePolicy{Settings: map[string]structs.FeatureGateSetting{
+			"test-feature": {Enabled: true, Source: structs.FeatureGateSourceOperator},
+		}},
+		Status: &structs.FeatureGateStatus{
+			RegistryDigest: "digest",
+			Features: map[string]structs.ResolvedFeatureGate{
+				"test-feature": {DesiredEnabled: true, EffectiveEnabled: true, Eligible: true},
+			},
+		},
+	}
+	buf, err := structs.Encode(structs.FeatureGateRequestType|structs.IgnoreUnknownTypeFlag, req)
+	require.NoError(t, err)
+	require.Equal(t, true, fsm.Apply(makeLog(buf)))
+
+	data := sink.Data()
+	require.Greater(t, len(data), 0)
+	found := false
+	var sample goMetrics.SampledValue
+	for _, intv := range data {
+		intv.RLock()
+		if val, ok := intv.Samples["fsm.feature-gate"]; ok {
+			found = true
+			sample = val
+		}
+		intv.RUnlock()
+		if found {
+			break
+		}
+	}
+	require.True(t, found, "expected fsm.feature-gate timer sample to be emitted")
+	require.Greater(t, sample.Sum, 0.0)
+}
+
 func TestFSM_Intention_CRUD(t *testing.T) {
 	t.Parallel()
 
@@ -1352,8 +1420,8 @@ func TestFSM_ConfigEntry(t *testing.T) {
 	{
 		_, config, err := fsm.state.ConfigEntry(nil, structs.ProxyDefaults, "global", nil)
 		require.NoError(t, err)
-		entry.RaftIndex.CreateIndex = 1
-		entry.RaftIndex.ModifyIndex = 1
+		entry.CreateIndex = 1
+		entry.ModifyIndex = 1
 		require.Equal(t, entry, config)
 	}
 }
@@ -1396,8 +1464,8 @@ func TestFSM_ConfigEntry_StatusCAS(t *testing.T) {
 	{
 		_, config, err := fsm.state.ConfigEntry(nil, structs.APIGateway, "global", nil)
 		require.NoError(t, err)
-		entry.RaftIndex.CreateIndex = 1
-		entry.RaftIndex.ModifyIndex = 1
+		entry.CreateIndex = 1
+		entry.ModifyIndex = 1
 		require.Equal(t, entry.DefaultStatus(), config.(*structs.APIGatewayConfigEntry).GetStatus())
 	}
 
@@ -1425,7 +1493,7 @@ func TestFSM_ConfigEntry_StatusCAS(t *testing.T) {
 	{
 		_, config, err := fsm.state.ConfigEntry(nil, structs.APIGateway, "global", nil)
 		require.NoError(t, err)
-		entry.RaftIndex.ModifyIndex = 2
+		entry.ModifyIndex = 2
 		conditions := config.(*structs.APIGatewayConfigEntry).Status.Conditions
 		require.Len(t, conditions, 1)
 		require.Equal(t, string(api.ConditionStatusTrue), conditions[0].Status)

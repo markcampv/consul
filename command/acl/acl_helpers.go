@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package acl
@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/hashicorp/consul/acl"
 	"github.com/hashicorp/consul/agent/structs"
 	"github.com/hashicorp/consul/api"
 	"github.com/hashicorp/consul/command/helpers"
 	"github.com/hashicorp/hcl"
-	"github.com/mitchellh/mapstructure"
 )
 
 func GetTokenAccessorIDFromPartial(client *api.Client, partialAccessorID string) (string, error) {

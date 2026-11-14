@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 //go:build !consulent
@@ -9,6 +9,6 @@ package autoconf
 type EnterpriseConfig struct{}
 
 // finalize is a noop for CE
-func (_ *EnterpriseConfig) validateAndFinalize() error {
+func (*EnterpriseConfig) validateAndFinalize() error {
 	return nil
 }

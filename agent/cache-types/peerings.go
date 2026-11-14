@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package cachetype
@@ -66,7 +66,7 @@ type PeeringLister interface {
 	) (*pbpeering.PeeringListResponse, error)
 }
 
-func (t *Peerings) Fetch(opts cache.FetchOptions, req cache.Request) (cache.FetchResult, error) {
+func (t *Peerings) Fetch(ctx context.Context, opts cache.FetchOptions, req cache.Request) (cache.FetchResult, error) {
 	var result cache.FetchResult
 
 	// The request should be a PeeringListRequest.
@@ -83,22 +83,22 @@ func (t *Peerings) Fetch(opts cache.FetchOptions, req cache.Request) (cache.Fetc
 	reqReal = &dup
 
 	// Set the minimum query index to our current index, so we block
-	reqReal.QueryOptions.MinQueryIndex = opts.MinIndex
-	reqReal.QueryOptions.MaxQueryTime = opts.Timeout
+	reqReal.MinQueryIndex = opts.MinIndex
+	reqReal.MaxQueryTime = opts.Timeout
 
 	// We allow stale queries here to spread out the RPC load, but peerstream information, including the STATUS,
 	// will not be returned. Right now this is fine for the watch in proxycfg/mesh_gateway.go,
 	// but it could be a problem for a future consumer.
-	reqReal.QueryOptions.SetAllowStale(true)
+	reqReal.SetAllowStale(true)
 
-	ctx, err := external.ContextWithQueryOptions(context.Background(), reqReal.QueryOptions)
+	qctx, err := external.ContextWithQueryOptions(ctx, reqReal.QueryOptions)
 	if err != nil {
 		return result, err
 	}
 
 	// Fetch
 	var header metadata.MD
-	reply, err := t.Client.PeeringList(ctx, reqReal.Request, grpc.Header(&header))
+	reply, err := t.Client.PeeringList(qctx, reqReal.Request, grpc.Header(&header))
 	if err != nil {
 		// Return an empty result if the error is due to peering being disabled.
 		// This allows mesh gateways to receive an update and confirm that the watch is set.

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package monitor
@@ -82,14 +82,11 @@ func (c *cmd) Run(args []string) int {
 	go func() {
 		defer close(eventDoneCh)
 	OUTER:
-		for {
-			select {
-			case log := <-logCh:
-				if log == "" {
-					break OUTER
-				}
-				c.UI.Info(log)
+		for log := range logCh {
+			if log == "" {
+				break OUTER
 			}
+			c.UI.Info(log)
 		}
 
 		c.lock.Lock()

@@ -46,6 +46,7 @@ func NodeServiceToStructs(s *NodeService, t *structs.NodeService) {
 	t.TaggedAddresses = MapStringServiceAddressToStructs(s.TaggedAddresses)
 	t.Meta = s.Meta
 	t.Port = int(s.Port)
+	t.Ports = PortsToStructs(s.Ports)
 	t.SocketPath = s.SocketPath
 	t.Weights = WeightsPtrToStructs(s.Weights)
 	t.EnableTagOverride = s.EnableTagOverride
@@ -56,6 +57,7 @@ func NodeServiceToStructs(s *NodeService, t *structs.NodeService) {
 	if s.Connect != nil {
 		ServiceConnectToStructs(s.Connect, &t.Connect)
 	}
+	t.AI = ServiceAIPtrToStructs(s.AI)
 	t.LocallyRegisteredAsSidecar = s.LocallyRegisteredAsSidecar
 	t.EnterpriseMeta = EnterpriseMetaToStructs(s.EnterpriseMeta)
 	t.PeerName = s.PeerName
@@ -73,6 +75,7 @@ func NodeServiceFromStructs(t *structs.NodeService, s *NodeService) {
 	s.TaggedAddresses = NewMapStringServiceAddressFromStructs(t.TaggedAddresses)
 	s.Meta = t.Meta
 	s.Port = int32(t.Port)
+	s.Ports = NewPortsFromStructs(t.Ports)
 	s.SocketPath = t.SocketPath
 	s.Weights = NewWeightsPtrFromStructs(t.Weights)
 	s.EnableTagOverride = t.EnableTagOverride
@@ -87,6 +90,7 @@ func NodeServiceFromStructs(t *structs.NodeService, s *NodeService) {
 		ServiceConnectFromStructs(&t.Connect, &x)
 		s.Connect = &x
 	}
+	s.AI = NewServiceAIPtrFromStructs(t.AI)
 	s.LocallyRegisteredAsSidecar = t.LocallyRegisteredAsSidecar
 	s.EnterpriseMeta = NewEnterpriseMetaFromStructs(t.EnterpriseMeta)
 	s.PeerName = t.PeerName

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package delete
@@ -81,7 +81,7 @@ func (c *cmd) Run(args []string) int {
 				Token:     c.http.Token(),
 			}
 		} else {
-			c.UI.Error(fmt.Sprintf("Please provide an input file with resource definition"))
+			c.UI.Error("Please provide an input file with resource definition")
 			return 1
 		}
 	} else {

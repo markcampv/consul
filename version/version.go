@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package version
@@ -72,4 +72,12 @@ func GetBuildInfo() *BuildInfo {
 		HumanVersion: GetHumanVersion(),
 		FIPS:         GetFIPSInfo(),
 	}
+}
+
+// IsEnterprise reports whether this build of Consul includes Enterprise features.
+// Enterprise binaries set VersionMetadata to "ent" (or an "ent." prefixed variant)
+// via build-time ldflags. Community builds leave the metadata empty.
+func IsEnterprise() bool {
+	metadata := VersionMetadata
+	return strings.HasPrefix(metadata, "ent")
 }

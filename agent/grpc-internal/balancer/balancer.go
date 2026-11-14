@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 // package balancer implements a custom gRPC load balancer.
@@ -203,6 +203,10 @@ func (si *serverInfo) String() string {
 // Close is called by gRPC when the Balancer is no longer needed (e.g. when the
 // ClientConn is closed by the application).
 func (b *balancer) Close() { b.closeFn() }
+
+// ExitIdle instructs the LB policy to reconnect to backends / exit the
+// IDLE state, if appropriate and possible.
+func (b *balancer) ExitIdle() {}
 
 // ResolverError is called by gRPC when the resolver reports an error. It puts
 // the connection into a TRANSIENT_FAILURE state.

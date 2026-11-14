@@ -1,9 +1,32 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 @import 'layouts/index';
+
+/* Move the HDS dialog scroll-lock from <body> to <html>.
+
+   Hds::Modal locks scrolling with inline `overflow: hidden` on
+   <body>. That only propagates to the viewport while the root element's
+   overflow is `visible`, and base/reset/system.scss overrides it -- so instead
+   <body> becomes a scroll container at scrollTop 0, and the `position: sticky`
+   `.hds-app-frame__sidebar` re-anchors to it and jumps up by the current scroll
+   offset. Locking the real scrolling element leaves that scrollport alone. */
+$hds-dialog-open: 'dialog.hds-dialog-primitive__wrapper[open]';
+
+html {
+  /* reserve the scrollbar so the lock below doesn't shift the page sideways */
+  scrollbar-gutter: stable;
+}
+html:has(#{$hds-dialog-open}) {
+  overflow-y: hidden;
+}
+/* author `!important` outranks HDS's inline style */
+body:has(#{$hds-dialog-open}) {
+  overflow: visible !important;
+}
+/**/
 
 /* position main app-view when there are/aren't breadcrumbs */
 .app-view {
@@ -69,14 +92,9 @@ html[data-route$='edit'] .app-view > header + div > *:first-child {
   border-top-width: 0 !important;
 }
 
-.consul-upstream-instance-list {
-  margin-top: 0 !important;
-}
 /* turn off top borders for things flush up to a filter bar */
 html[data-route='dc.services.index'] .consul-service-list ul,
-.consul-nspace-list ul,
 .consul-service-instance-list ul,
-.consul-node-list ul,
 .consul-role-list ul,
 .consul-policy-list ul,
 .consul-token-list ul,
@@ -89,7 +107,7 @@ html[data-route='dc.services.index'] .consul-service-list ul,
 // %main-decoration ? %main-skin ? %content-skin ?
 // it includes layouts of components, but not layout of itself?
 // %main-components? What about %app-view-content
-main,
+.app-shell__main,
 %modal-window {
   @extend %main-content;
 }
@@ -105,20 +123,21 @@ html:not(.has-partitions) [class*='partition-'] {
   min-height: 100vh;
 }
 
-main {
+.app-shell__main {
   padding: 0 48px;
   position: relative;
   flex: 1;
+  min-width: 0;
 }
-main,
+.app-shell__main,
 #wrapper > footer {
   @extend %content-container;
 }
-html[data-route$='create'] main,
-html[data-route$='edit'] main {
+html[data-route$='create'] .app-shell__main,
+html[data-route$='edit'] .app-shell__main {
   @extend %content-container-restricted;
 }
-html:not([data-route$='index']):not([data-route$='instances']) main {
+html:not([data-route$='index']):not([data-route$='instances']) .app-shell__main {
   margin-bottom: 2em;
 }
 
@@ -137,7 +156,7 @@ html:not([data-route$='index']):not([data-route$='instances']) main {
   margin-bottom: 2em;
 }
 @media #{$--lt-wide-form} {
-  main form [type='reset'] {
+  .app-shell__main form [type='reset'] {
     float: right;
     margin-right: 0 !important;
   }

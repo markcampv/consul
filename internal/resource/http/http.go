@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package http
@@ -6,6 +6,7 @@ package http
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"path"
@@ -90,6 +91,11 @@ func (h *resourceHandler) handleWrite(w http.ResponseWriter, r *http.Request, ct
 	// convert req body to writeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		h.logger.Error("Failed to decode request body", "error", err)
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			return
+		}
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte("Request body format is invalid"))
 		return

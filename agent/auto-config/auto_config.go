@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package autoconf
@@ -95,7 +95,7 @@ func New(config Config) (*AutoConfig, error) {
 		}
 	}
 
-	if err := config.EnterpriseConfig.validateAndFinalize(); err != nil {
+	if err := config.validateAndFinalize(); err != nil {
 		return nil, err
 	}
 

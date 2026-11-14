@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -35,10 +35,10 @@ export default function (
       'tags',
     ]),
     // TODO: These need to somehow move to subpages
-    instances: collection('.consul-service-instance-list > ul > li:not(:first-child)', {
+    instances: collection('.consul-service-instance-table tbody tr', {
       address: text('[data-test-address]'),
       externalSource: attribute('data-test-external-source', '[data-test-external-source]'),
-      instance: clickable('a'),
+      instance: clickable('a', { at: 0 }),
       nodeChecks: text('[data-test-node-health-checks]'),
       nodeName: text('[data-test-node-name]'),
     }),
@@ -65,17 +65,17 @@ export default function (
     },
   };
   page.tabs.upstreamsTab = {
-    services: collection('.consul-upstream-list > ul > li:not(:first-child)', {
+    services: collection('.consul-upstream-table tbody tr', {
       name: text('[data-test-service-name]'),
     }),
   };
   page.tabs.linkedServicesTab = {
-    services: collection('.consul-service-list > ul > li:not(:first-child)', {
+    services: collection('.consul-service-table tbody tr', {
       name: text('[data-test-service-name]'),
     }),
   };
   page.tabs.tagsTab = {
-    tags: collection('.tag-list dd > span', {
+    tags: collection('.tag-list .hds-tag', {
       name: text(),
     }),
   };

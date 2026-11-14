@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package consul
@@ -23,6 +23,7 @@ import (
 	"github.com/hashicorp/serf/serf"
 
 	"github.com/hashicorp/consul/acl"
+	"github.com/hashicorp/consul/agent/netutil"
 	"github.com/hashicorp/consul/agent/structs"
 	tokenStore "github.com/hashicorp/consul/agent/token"
 	"github.com/hashicorp/consul/api"
@@ -395,7 +396,6 @@ func TestLeader_ACL_Initialization(t *testing.T) {
 	tests := []struct {
 		name              string
 		initialManagement string
-		hcpManagement     string
 
 		// canBootstrap tracks whether the ACL system can be bootstrapped
 		// after the leader initializes ACLs. Bootstrapping is the act
@@ -405,25 +405,11 @@ func TestLeader_ACL_Initialization(t *testing.T) {
 		{
 			name:              "bootstrap from initial management",
 			initialManagement: "c9ad785a-420d-470d-9b4d-6d9f084bfa87",
-			hcpManagement:     "",
-			canBootstrap:      false,
-		},
-		{
-			name:              "bootstrap from hcp management",
-			initialManagement: "",
-			hcpManagement:     "924bc0e1-a41b-4f3a-b5e8-0899502fc50e",
-			canBootstrap:      false,
-		},
-		{
-			name:              "bootstrap with both",
-			initialManagement: "c9ad785a-420d-470d-9b4d-6d9f084bfa87",
-			hcpManagement:     "924bc0e1-a41b-4f3a-b5e8-0899502fc50e",
 			canBootstrap:      false,
 		},
 		{
 			name:              "did not bootstrap",
 			initialManagement: "",
-			hcpManagement:     "",
 			canBootstrap:      true,
 		},
 	}
@@ -435,7 +421,6 @@ func TestLeader_ACL_Initialization(t *testing.T) {
 				c.PrimaryDatacenter = "dc1"
 				c.ACLsEnabled = true
 				c.ACLInitialManagementToken = tt.initialManagement
-				c.Cloud.ManagementToken = tt.hcpManagement
 			}
 			_, s1 := testServerWithConfig(t, conf)
 			testrpc.WaitForTestAgent(t, s1.RPC, "dc1")
@@ -452,13 +437,6 @@ func TestLeader_ACL_Initialization(t *testing.T) {
 				require.NoError(t, err)
 				require.NotNil(t, initialManagement)
 				require.Equal(t, tt.initialManagement, initialManagement.SecretID)
-			}
-
-			if tt.hcpManagement != "" {
-				_, hcpManagement, err := s1.fsm.State().ACLTokenGetBySecret(nil, tt.hcpManagement, nil)
-				require.NoError(t, err)
-				require.NotNil(t, hcpManagement)
-				require.Equal(t, tt.hcpManagement, hcpManagement.SecretID)
 			}
 
 			canBootstrap, _, err := s1.fsm.State().CanBootstrapACLToken()
@@ -1091,10 +1069,10 @@ func TestDatacenterSupportsFederationStates(t *testing.T) {
 }
 
 func TestDatacenterSupportsIntentionsAsConfigEntries(t *testing.T) {
+	netutil.GetAgentBindAddrFunc = netutil.GetMockGetAgentBindAddrFunc("0.0.0.0")
 	if testing.Short() {
 		t.Skip("too slow for testing.Short")
 	}
-
 	addLegacyIntention := func(srv *Server, dc, src, dest string, allow bool) error {
 		ixn := &structs.Intention{
 			SourceNS:        structs.IntentionDefaultNamespace,
@@ -1444,6 +1422,7 @@ func TestDatacenterSupportsIntentionsAsConfigEntries(t *testing.T) {
 }
 
 func TestLeader_EnableVirtualIPs(t *testing.T) {
+	netutil.GetAgentBindAddrFunc = netutil.GetMockGetAgentBindAddrFunc("0.0.0.0")
 	if testing.Short() {
 		t.Skip("too slow for testing.Short")
 	}
@@ -1550,7 +1529,6 @@ func TestLeader_EnableVirtualIPs(t *testing.T) {
 		require.NotNil(r, entry)
 		require.Equal(r, "true", entry.Value)
 	})
-
 	// Update the connect-native service - now there should be a virtual IP assigned.
 	err = state.EnsureRegistration(20, &structs.RegisterRequest{
 		Node:    "foo",

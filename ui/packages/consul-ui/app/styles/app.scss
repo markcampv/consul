@@ -1,15 +1,16 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 @charset 'utf-8';
 
-/* tailwind before all the customizations */
-@import 'tailwind';
+@use "ember-basic-dropdown.css"; // ember-basic-dropdown
+@use "ember-power-select"; // ember-power-select
 
 /* css for hds */
-@import '@hashicorp/design-system-components';
+@use "helpers/typography.css";
+@use '@hashicorp/design-system-components.css';
 
 /* all variables and custom queries including generic base variables */
 @import 'variables';
@@ -30,3 +31,5 @@
 /* debug only, this is empty during a production build */
 /* but uses the contents of ./debug.scss during dev */
 @import '_debug';
+
+@import 'tailwind-like';

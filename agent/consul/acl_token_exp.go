@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package consul
@@ -111,7 +111,7 @@ func (s *Server) reapExpiredACLTokens(local, global bool) (int, error) {
 
 	// Purge the identities from the cache
 	for _, secretID := range secretIDs {
-		s.ACLResolver.cache.RemoveIdentityWithSecretToken(secretID)
+		s.cache.RemoveIdentityWithSecretToken(secretID)
 	}
 
 	return len(req.TokenIDs), nil

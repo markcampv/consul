@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package local
@@ -22,9 +22,9 @@ import (
 	"github.com/hashicorp/consul/lib/stringslice"
 	"github.com/hashicorp/consul/types"
 
-	"github.com/armon/go-metrics"
-	"github.com/armon/go-metrics/prometheus"
 	"github.com/hashicorp/go-hclog"
+	"github.com/hashicorp/go-metrics"
+	"github.com/hashicorp/go-metrics/prometheus"
 	"github.com/hashicorp/go-multierror"
 	"github.com/mitchellh/copystructure"
 )
@@ -617,7 +617,7 @@ func (l *State) AddAliasCheck(checkID structs.CheckID, srcServiceID structs.Serv
 
 // ServiceExists return true if the given service does exists
 func (l *State) ServiceExists(serviceID structs.ServiceID) bool {
-	serviceID.EnterpriseMeta.Normalize()
+	serviceID.Normalize()
 
 	l.Lock()
 	defer l.Unlock()

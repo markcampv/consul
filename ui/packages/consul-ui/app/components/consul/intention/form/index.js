@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -23,6 +23,9 @@ export default class ConsulIntentionForm extends Component {
 
   @tracked isManagedByCRDs;
 
+  @tracked isDeleteModalOpen = false;
+  @tracked pendingDelete = null;
+
   modal = null; // reference to the warning modal
 
   @service('repository/intention') repo;
@@ -30,6 +33,27 @@ export default class ConsulIntentionForm extends Component {
   constructor(owner, args) {
     super(...arguments);
     this.updateCRDManagement();
+  }
+
+  @action
+  openDeleteModal(deleteFn) {
+    this.pendingDelete = deleteFn;
+    this.isDeleteModalOpen = true;
+  }
+
+  @action
+  closeDeleteModal() {
+    this.isDeleteModalOpen = false;
+    this.pendingDelete = null;
+  }
+
+  @action
+  confirmDelete() {
+    const deleteFn = this.pendingDelete;
+    this.closeDeleteModal();
+    if (deleteFn) {
+      deleteFn();
+    }
   }
 
   @action
@@ -89,12 +113,12 @@ export default class ConsulIntentionForm extends Component {
       )
       .sort((a, b) => a.Name.localeCompare(b.Name));
     items = [{ Name: '*' }].concat(items);
-    let source = items.findBy('Name', item.SourceName);
+    let source = items.find((service) => service.Name === item.SourceName);
     if (!source) {
       source = { Name: item.SourceName };
       items = [source].concat(items);
     }
-    let destination = items.findBy('Name', item.DestinationName);
+    let destination = items.find((service) => service.Name === item.DestinationName);
     if (!destination) {
       destination = { Name: item.DestinationName };
       items = [destination].concat(items);
@@ -111,12 +135,12 @@ export default class ConsulIntentionForm extends Component {
     // 2. Include the current SourceNS and DestinationNS incase they don't exist yet
     let items = e.data.toArray().sort((a, b) => a.Name.localeCompare(b.Name));
     items = [{ Name: '*' }].concat(items);
-    let source = items.findBy('Name', item.SourceNS);
+    let source = items.find((nspace) => nspace.Name === item.SourceNS);
     if (!source) {
       source = { Name: item.SourceNS };
       items = [source].concat(items);
     }
-    let destination = items.findBy('Name', item.DestinationNS);
+    let destination = items.find((nspace) => nspace.Name === item.DestinationNS);
     if (!destination) {
       destination = { Name: item.DestinationNS };
       items = [destination].concat(items);
@@ -132,12 +156,12 @@ export default class ConsulIntentionForm extends Component {
     // 1. NOT include an 'All Partitions' option
     // 2. Include the current SourcePartition and DestinationPartition incase they don't exist yet
     let items = e.data.toArray().sort((a, b) => a.Name.localeCompare(b.Name));
-    let source = items.findBy('Name', item.SourcePartition);
+    let source = items.find((partition) => partition.Name === item.SourcePartition);
     if (!source) {
       source = { Name: item.SourcePartition };
       items = [source].concat(items);
     }
-    let destination = items.findBy('Name', item.DestinationPartition);
+    let destination = items.find((partition) => partition.Name === item.DestinationPartition);
     if (!destination) {
       destination = { Name: item.DestinationPartition };
       items = [destination].concat(items);
@@ -180,23 +204,29 @@ export default class ConsulIntentionForm extends Component {
         switch (target.name) {
           case 'SourceName':
           case 'DestinationName':
-            if (this.services.filterBy('Name', name).length === 0) {
+            // this.services/nspaces/partitions are only populated once their
+            // respective DataSource's `@onchange` has fired (see
+            // createServices/createNspaces/createPartitions below) -- a
+            // selection made before that resolves (or if it never does)
+            // would otherwise throw here and crash the whole app, so treat
+            // 'not loaded yet' the same as 'not already in the list'.
+            if ((this.services || []).filterBy('Name', name).length === 0) {
               selected = { Name: name };
-              this.services = [selected].concat(this.services.toArray());
+              this.services = [selected].concat((this.services || []).toArray());
             }
             break;
           case 'SourceNS':
           case 'DestinationNS':
-            if (this.nspaces.filterBy('Name', name).length === 0) {
+            if ((this.nspaces || []).filterBy('Name', name).length === 0) {
               selected = { Name: name };
-              this.nspaces = [selected].concat(this.nspaces.toArray());
+              this.nspaces = [selected].concat((this.nspaces || []).toArray());
             }
             break;
           case 'SourcePartition':
           case 'DestinationPartition':
-            if (this.partitions.filterBy('Name', name).length === 0) {
+            if ((this.partitions || []).filterBy('Name', name).length === 0) {
               selected = { Name: name };
-              this.partitions = [selected].concat(this.partitions.toArray());
+              this.partitions = [selected].concat((this.partitions || []).toArray());
             }
             break;
         }

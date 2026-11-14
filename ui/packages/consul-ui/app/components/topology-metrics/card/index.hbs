@@ -6,7 +6,7 @@
 {{#if (eq @item.Datacenter '')}}
 <a
   class="topology-metrics-card"
-  href={{href-to 'dc.services.index'}}
+  href={{href-to 'dc.services.index' @dc}}
   data-permission={{service/card-permissions @item}}
 >
   <p class="empty">
@@ -38,10 +38,8 @@
     <div class={{if (not-eq @item.Partition @service.Partition) 'group'}}>
       {{#if (not-eq @item.Partition @service.Partition)}}
       <dl class="partition">
-        <dt>
-          <Tooltip>
-              Admin Partition
-          </Tooltip>
+        <dt role="group" tabindex="-1" aria-label="Admin Partition" {{hds-tooltip "Admin Partition" options=(detached-tooltip-options)}}>
+          Admin Partition
         </dt>
         <dd>
           {{@item.Partition}}
@@ -51,10 +49,8 @@
       <span></span>
       {{#if (or (not-eq @item.Partition @service.Partition) (not-eq @item.Namespace @service.Namespace))}}
       <dl class="nspace">
-        <dt>
-          <Tooltip>
-              Namespace
-          </Tooltip>
+        <dt role="group" tabindex="-1" aria-label="Namespace" {{hds-tooltip "Namespace" options=(detached-tooltip-options)}}>
+          Namespace
         </dt>
         <dd>
           {{@item.Namespace}}
@@ -72,22 +68,20 @@
     <span class="empty">No health checks</span>
   {{else}}
     {{#if (not-eq percentage.passing 0)}}
-      <span class="passing">{{percentage.passing}}%</span>
+      <span class="passing"><span class="sr-only">Passing: </span>{{percentage.passing}}%</span>
     {{/if}}
     {{#if (not-eq percentage.warning 0)}}
-      <span class="warning">{{percentage.warning}}%</span>
+      <span class="warning"><span class="sr-only">Warning: </span>{{percentage.warning}}%</span>
     {{/if}}
     {{#if (not-eq percentage.critical 0)}}
-      <span class="critical">{{percentage.critical}}%</span>
+      <span class="critical"><span class="sr-only">Critical: </span>{{percentage.critical}}%</span>
     {{/if}}
   {{/if}}
   {{/let}}
 {{else}}
     <dl class="health">
-      <dt>
-        <Tooltip>
-            We are unable to determine the health status of services in remote datacenters.
-        </Tooltip>
+      <dt role="group" tabindex="-1" aria-label="Health" {{hds-tooltip "We are unable to determine the health status of services in remote datacenters." options=(detached-tooltip-options)}}>
+        Health
       </dt>
       <dd>
         Health

@@ -1,15 +1,14 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 /*eslint ember/closure-actions: "warn"*/
 import Component from '@ember/component';
 import { inject as service } from '@ember/service';
-import Slotted from 'block-slots';
 import { set } from '@ember/object';
 
-export default Component.extend(Slotted, {
+export default Component.extend({
   tagName: '',
   dom: service('dom'),
   expanded: false,
@@ -22,9 +21,6 @@ export default Component.extend(Slotted, {
     this._super(...arguments);
     this.guid = this.dom.guid(this);
     this.submenus = [];
-  },
-  willRender: function () {
-    set(this, 'hasHeader', this._isRegistered('header'));
   },
   actions: {
     addSubmenu: function (name) {
@@ -44,12 +40,6 @@ export default Component.extend(Slotted, {
         });
       }
       this.onchange(e);
-    },
-    // Temporary send here so we can send route actions
-    // easily. It kind of makes sense that you'll want to perform
-    // route actions from a popup menu for the moment
-    send: function () {
-      this.sendAction(...arguments);
     },
   },
 });

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package agent
@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/armon/go-metrics"
 	external "github.com/hashicorp/consul/agent/grpc-external"
 	"github.com/hashicorp/consul/proto/private/pboperator"
+	"github.com/hashicorp/go-metrics"
 
 	multierror "github.com/hashicorp/go-multierror"
 	"github.com/hashicorp/raft"
@@ -67,7 +67,7 @@ func (s *HTTPHandlers) OperatorRaftTransferLeader(resp http.ResponseWriter, req 
 	if err != nil {
 		return nil, err
 	}
-	if result.Success != true {
+	if !result.Success {
 		return nil, HTTPError{StatusCode: http.StatusNotFound, Reason: fmt.Sprintf("Failed to transfer Leader: %s", err.Error())}
 	}
 	reply := new(api.TransferLeaderResponse)
@@ -396,12 +396,12 @@ RETRY_ONCE:
 			s.nodeMetricsLabels())
 		return nil, err
 	}
-	if args.QueryOptions.AllowStale && args.MaxStaleDuration > 0 && args.MaxStaleDuration < out.LastContact {
+	if args.AllowStale && args.MaxStaleDuration > 0 && args.MaxStaleDuration < out.LastContact {
 		args.AllowStale = false
 		args.MaxStaleDuration = 0
 		goto RETRY_ONCE
 	}
-	out.ConsistencyLevel = args.QueryOptions.ConsistencyLevel()
+	out.ConsistencyLevel = args.ConsistencyLevel()
 	metrics.IncrCounterWithLabels([]string{"client", "api", "success", "operator_usage"}, 1,
 		s.nodeMetricsLabels())
 	return out, nil

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package consul
@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"time"
 
-	metrics "github.com/armon/go-metrics"
+	metrics "github.com/hashicorp/go-metrics"
 	hashstructure_v2 "github.com/mitchellh/hashstructure/v2"
 
 	"github.com/hashicorp/go-bexpr"
@@ -87,6 +87,16 @@ func (c *ConfigEntry) Apply(args *structs.ConfigEntryRequest, reply *bool) error
 	} else if skip {
 		*reply = true
 		return nil
+	}
+
+	// Compatibility checks run only for authorized writes that change the
+	// stored entry, so they neither leak server details nor block no-ops.
+	_, currentEntry, err := c.srv.fsm.State().ConfigEntry(nil, args.Entry.GetKind(), args.Entry.GetName(), args.Entry.GetEnterpriseMeta())
+	if err != nil {
+		return fmt.Errorf("error reading current config entry value: %w", err)
+	}
+	if err := c.checkMeshPQCCompatibility(args.Entry, currentEntry); err != nil {
+		return err
 	}
 
 	resp, err := c.srv.raftApply(structs.ConfigEntryRequestType, args)
@@ -264,7 +274,7 @@ func (c *ConfigEntry) List(args *structs.ConfigEntryQuery, reply *structs.Indexe
 			for _, entry := range entries {
 				if err := entry.CanRead(authz); err != nil {
 					// TODO we may wish to extract more details from this error to aid user comprehension
-					reply.QueryMeta.ResultsFilteredByACLs = true
+					reply.ResultsFilteredByACLs = true
 					continue
 				}
 				filteredEntries = append(filteredEntries, entry)
@@ -354,7 +364,7 @@ func (c *ConfigEntry) ListAll(args *structs.ConfigEntryListAllRequest, reply *st
 			for _, entry := range entries {
 				if err := entry.CanRead(authz); err != nil {
 					// TODO we may wish to extract more details from this error to aid user comprehension
-					reply.QueryMeta.ResultsFilteredByACLs = true
+					reply.ResultsFilteredByACLs = true
 					continue
 				}
 				// Doing this filter outside of memdb isn't terribly

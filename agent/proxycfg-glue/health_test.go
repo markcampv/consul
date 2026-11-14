@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package proxycfgglue
@@ -136,7 +136,7 @@ func TestServerHealth(t *testing.T) {
 
 func newMockHealth(t *testing.T) *mockHealth {
 	mock := &mockHealth{}
-	mock.Mock.Test(t)
+	mock.Test(t)
 
 	t.Cleanup(func() { mock.AssertExpectations(t) })
 

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package xds
@@ -19,13 +19,16 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/hashicorp/consul/agent/configentry"
 	"github.com/hashicorp/consul/agent/connect"
 	"github.com/hashicorp/consul/agent/consul/discoverychain"
+	"github.com/hashicorp/consul/agent/netutil"
 	"github.com/hashicorp/consul/agent/proxycfg"
 	"github.com/hashicorp/consul/agent/structs"
 	"github.com/hashicorp/consul/agent/xds/response"
 	"github.com/hashicorp/consul/agent/xds/testcommon"
 	"github.com/hashicorp/consul/envoyextensions/xdscommon"
+	"github.com/hashicorp/consul/proto/private/pbpeering"
 	"github.com/hashicorp/consul/sdk/testutil"
 	"github.com/hashicorp/consul/types"
 )
@@ -50,6 +53,7 @@ type goldenTestCase struct {
 }
 
 func TestAllResourcesFromSnapshot(t *testing.T) {
+	netutil.GetAgentBindAddrFunc = netutil.GetMockGetAgentBindAddrFunc("0.0.0.0")
 	if testing.Short() {
 		t.Skip("too slow for testing.Short")
 	}
@@ -304,6 +308,7 @@ func TestAllResourcesFromSnapshot(t *testing.T) {
 	tests = append(tests, getTrafficControlPeeringGoldenTestCases(false)...)
 	tests = append(tests, getEnterpriseGoldenTestCases(t)...)
 	tests = append(tests, getAPIGatewayGoldenTestCases(t)...)
+	tests = append(tests, getAPIGatewayPeeringGoldenTestCases(t)...)
 	tests = append(tests, getExposePathGoldenTestCases()...)
 	tests = append(tests, getCustomConfigurationGoldenTestCases(false)...)
 	tests = append(tests, getConnectProxyJWTProviderGoldenTestCases()...)
@@ -348,6 +353,21 @@ func getConnectProxyTransparentProxyGoldenTestCases() []goldenTestCase {
 			name: "transparent-proxy-http-upstream",
 			create: func(t testinf.T) *proxycfg.ConfigSnapshot {
 				return proxycfg.TestConfigSnapshotTransparentProxyHTTPUpstream(t, nil)
+			},
+		},
+		{
+			// Exercises the egress recursor DNS listener (:8654) path.  The
+			// listener is only emitted when CfgFetcher.DNSRecursors() returns a
+			// non-empty list, so without this case a regression in that wiring
+			// (e.g. the CfgFetcher guard or wrong port) would go undetected.
+			name: "transparent-proxy-http-upstream-with-recursors",
+			create: func(t testinf.T) *proxycfg.ConfigSnapshot {
+				return proxycfg.TestConfigSnapshotTransparentProxyHTTPUpstream(t, nil)
+			},
+			generatorSetup: func(s *ResourceGenerator) {
+				s.CfgFetcher = &mockCfgFetcher{
+					dnsRecursors: []string{"8.8.8.8", "1.1.1.1:5353"},
+				}
 			},
 		},
 		{
@@ -630,6 +650,17 @@ func getConnectProxyDiscoChainTests(enterprise bool) []goldenTestCase {
 				)
 			},
 		},
+		{
+			name: "connect-proxy-with-http-max-request-headers",
+			create: func(t testinf.T) *proxycfg.ConfigSnapshot {
+				// Create a custom snapshot instead of using ProxyDefaults
+				snap := proxycfg.TestConfigSnapshotDiscoveryChain(t, "simple", enterprise, func(ns *structs.NodeService) {
+					ns.Proxy.Config["protocol"] = "http"
+					ns.Proxy.Config["max_request_headers_kb"] = 96
+				}, nil)
+				return snap
+			},
+		},
 	}
 
 	if enterprise {
@@ -790,6 +821,16 @@ func getMeshGatewayPeeringGoldenTestCases() []goldenTestCase {
 			},
 		},
 		{
+			name: "mesh-gateway-with-exported-peered-services-http-tracing",
+			create: func(t testinf.T) *proxycfg.ConfigSnapshot {
+				return proxycfg.TestConfigSnapshotPeeredMeshGateway(t, "default-services-http", func(ns *structs.NodeService) {
+					ns.Proxy.Config = map[string]interface{}{
+						"envoy_listener_tracing_json": gatewayListenerTracingJSON,
+					}
+				}, nil)
+			},
+		},
+		{
 			name: "mesh-gateway-with-exported-peered-services-http-with-router",
 			create: func(t testinf.T) *proxycfg.ConfigSnapshot {
 				return proxycfg.TestConfigSnapshotPeeredMeshGateway(t, "chain-and-l7-stuff", nil, nil)
@@ -817,8 +858,47 @@ func getMeshGatewayPeeringGoldenTestCases() []goldenTestCase {
 				return proxycfg.TestConfigSnapshotPeeredMeshGateway(t, "peer-through-mesh-gateway", nil, nil)
 			},
 		},
+		{
+			name: "mesh-gateway-peering-service-max-request-headers",
+			create: func(t testinf.T) *proxycfg.ConfigSnapshot {
+				// Start with the standard HTTP snapshot
+				snap := proxycfg.TestConfigSnapshotPeeredMeshGateway(t, "default-services-http", func(ns *structs.NodeService) {
+					// Set mesh gateway proxy config for default max_request_headers_kb
+					ns.Proxy.Config = map[string]interface{}{
+						"max_request_headers_kb": int64(128),
+					}
+				}, nil)
+
+				// Modify the "foo" service to have a service-specific max_request_headers_kb override
+				fooSN := structs.NewServiceName("foo", nil)
+				if serviceGroup, exists := snap.MeshGateway.ServiceGroups[fooSN]; exists && len(serviceGroup) > 0 {
+					// Create a new service node with proxy config containing max_request_headers_kb
+					modifiedService := *serviceGroup[0].Service // Copy the service
+					modifiedService.Proxy.Config = map[string]interface{}{
+						"max_request_headers_kb": int64(256), // Service-specific override
+						"protocol":               "http",
+					}
+
+					// Create a new service group with the modified service
+					modifiedNode := serviceGroup[0] // Copy the node
+					modifiedNode.Service = &modifiedService
+
+					// Replace the service group
+					snap.MeshGateway.ServiceGroups[fooSN] = structs.CheckServiceNodes{modifiedNode}
+				}
+
+				return snap
+			},
+		},
 	}
 }
+
+const gatewayListenerTracingJSON = `{
+	"@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager.Tracing",
+	"random_sampling": {"value": 100},
+	"overall_sampling": {"value": 100},
+	"spawn_upstream_span": true
+}`
 
 func getTrafficControlPeeringGoldenTestCases(enterprise bool) []goldenTestCase {
 	cases := []goldenTestCase{
@@ -1315,6 +1395,73 @@ func getAPIGatewayGoldenTestCases(t *testing.T) []goldenTestCase {
 			},
 		},
 		{
+			name: "api-gateway-with-header-match-invert",
+			create: func(t testinf.T) *proxycfg.ConfigSnapshot {
+				return proxycfg.TestConfigSnapshotAPIGateway(t, "default", nil, func(entry *structs.APIGatewayConfigEntry, bound *structs.BoundAPIGatewayConfigEntry) {
+					entry.Listeners = []structs.APIGatewayListener{
+						{
+							Name:     "listener",
+							Protocol: structs.ListenerProtocolHTTP,
+							Port:     8080,
+						},
+					}
+					bound.Listeners = []structs.BoundAPIGatewayListener{
+						{
+							Name: "listener",
+							Routes: []structs.ResourceReference{{
+								Kind: structs.HTTPRoute,
+								Name: "route",
+							}},
+						},
+					}
+				}, []structs.BoundRoute{
+					&structs.HTTPRouteConfigEntry{
+						Kind: structs.HTTPRoute,
+						Name: "route",
+						Rules: []structs.HTTPRouteRule{
+							{
+								// Rule 1: route when X-Canary header is ABSENT (present + invert)
+								Matches: []structs.HTTPMatch{{
+									Headers: []structs.HTTPHeaderMatch{{
+										Match:  structs.HTTPHeaderMatchPresent,
+										Name:   "X-Canary",
+										Invert: true,
+									}},
+								}},
+								Services: []structs.HTTPService{{Name: "service"}},
+							},
+							{
+								// Rule 2: route when X-Version is NOT "v2" (exact + invert)
+								Matches: []structs.HTTPMatch{{
+									Headers: []structs.HTTPHeaderMatch{{
+										Match:  structs.HTTPHeaderMatchExact,
+										Name:   "X-Version",
+										Value:  "v2",
+										Invert: true,
+									}},
+								}},
+								Services: []structs.HTTPService{{Name: "service"}},
+							},
+						},
+						Parents: []structs.ResourceReference{{
+							Kind: structs.APIGateway,
+							Name: "api-gateway",
+						}},
+					},
+				}, nil, []proxycfg.UpdateEvent{{
+					CorrelationID: "discovery-chain:" + serviceUID.String(),
+					Result: &structs.DiscoveryChainResponse{
+						Chain: serviceChain,
+					},
+				}, {
+					CorrelationID: "upstream-target:" + serviceChain.ID() + ":" + serviceUID.String(),
+					Result: &structs.IndexedCheckServiceNodes{
+						Nodes: proxycfg.TestUpstreamNodes(t, "service"),
+					},
+				}})
+			},
+		},
+		{
 			name: "api-gateway-with-http-route-timeoutfilter-one-set",
 			create: func(t testinf.T) *proxycfg.ConfigSnapshot {
 				return proxycfg.TestConfigSnapshotAPIGateway(t, "default", nil, func(entry *structs.APIGatewayConfigEntry, bound *structs.BoundAPIGatewayConfigEntry) {
@@ -1522,6 +1669,127 @@ func getAPIGatewayGoldenTestCases(t *testing.T) []goldenTestCase {
 			},
 		},
 		{
+			name: "api-gateway-http-listener-with-tracing",
+			create: func(t testinf.T) *proxycfg.ConfigSnapshot {
+				return proxycfg.TestConfigSnapshotAPIGateway(t, "default", func(ns *structs.NodeService) {
+					ns.Proxy.Config = map[string]interface{}{
+						"envoy_listener_tracing_json": gatewayListenerTracingJSON,
+					}
+				}, func(entry *structs.APIGatewayConfigEntry, bound *structs.BoundAPIGatewayConfigEntry) {
+					entry.Listeners = []structs.APIGatewayListener{{
+						Name:     "listener",
+						Protocol: structs.ListenerProtocolHTTP,
+						Port:     8080,
+					}}
+					bound.Listeners = []structs.BoundAPIGatewayListener{{
+						Name: "listener",
+						Routes: []structs.ResourceReference{{
+							Name: "http-route",
+							Kind: structs.HTTPRoute,
+						}},
+					}}
+				}, []structs.BoundRoute{
+					&structs.HTTPRouteConfigEntry{
+						Name: "http-route",
+						Kind: structs.HTTPRoute,
+						Parents: []structs.ResourceReference{{
+							Kind: structs.APIGateway,
+							Name: "api-gateway",
+						}},
+						Rules: []structs.HTTPRouteRule{{
+							Services: []structs.HTTPService{{Name: "http-service"}},
+						}},
+					},
+				}, nil, nil)
+			},
+		},
+		{
+			name: "api-gateway-http2-listener-with-http-route",
+			create: func(t testinf.T) *proxycfg.ConfigSnapshot {
+				return proxycfg.TestConfigSnapshotAPIGateway(t, "default", nil, func(entry *structs.APIGatewayConfigEntry, bound *structs.BoundAPIGatewayConfigEntry) {
+					entry.Listeners = []structs.APIGatewayListener{
+						{
+							Name:     "listener",
+							Protocol: structs.ListenerProtocolHTTP2,
+							Port:     8080,
+						},
+					}
+					bound.Listeners = []structs.BoundAPIGatewayListener{
+						{
+							Name: "listener",
+							Routes: []structs.ResourceReference{
+								{
+									Name: "http-route",
+									Kind: structs.HTTPRoute,
+								},
+							},
+						},
+					}
+				}, []structs.BoundRoute{
+					&structs.HTTPRouteConfigEntry{
+						Name: "http-route",
+						Kind: structs.HTTPRoute,
+						Parents: []structs.ResourceReference{
+							{
+								Kind: structs.APIGateway,
+								Name: "api-gateway",
+							},
+						},
+						Rules: []structs.HTTPRouteRule{
+							{
+								Services: []structs.HTTPService{
+									{Name: "http-service"},
+								},
+							},
+						},
+					},
+				}, nil, nil)
+			},
+		},
+		{
+			name: "api-gateway-grpc-listener-with-http-route",
+			create: func(t testinf.T) *proxycfg.ConfigSnapshot {
+				return proxycfg.TestConfigSnapshotAPIGateway(t, "default", nil, func(entry *structs.APIGatewayConfigEntry, bound *structs.BoundAPIGatewayConfigEntry) {
+					entry.Listeners = []structs.APIGatewayListener{
+						{
+							Name:     "listener",
+							Protocol: structs.ListenerProtocolGRPC,
+							Port:     8080,
+						},
+					}
+					bound.Listeners = []structs.BoundAPIGatewayListener{
+						{
+							Name: "listener",
+							Routes: []structs.ResourceReference{
+								{
+									Name: "http-route",
+									Kind: structs.HTTPRoute,
+								},
+							},
+						},
+					}
+				}, []structs.BoundRoute{
+					&structs.HTTPRouteConfigEntry{
+						Name: "http-route",
+						Kind: structs.HTTPRoute,
+						Parents: []structs.ResourceReference{
+							{
+								Kind: structs.APIGateway,
+								Name: "api-gateway",
+							},
+						},
+						Rules: []structs.HTTPRouteRule{
+							{
+								Services: []structs.HTTPService{
+									{Name: "http-service"},
+								},
+							},
+						},
+					},
+				}, nil, nil)
+			},
+		},
+		{
 			name: "api-gateway-tcp-listener-with-tcp-and-http-route",
 			create: func(t testinf.T) *proxycfg.ConfigSnapshot {
 				return proxycfg.TestConfigSnapshotAPIGateway(t, "default", nil, func(entry *structs.APIGatewayConfigEntry, bound *structs.BoundAPIGatewayConfigEntry) {
@@ -1651,6 +1919,518 @@ func getAPIGatewayGoldenTestCases(t *testing.T) []goldenTestCase {
 					}, nil, nil)
 			},
 		},
+		{
+			name: "api-gateway-with-http-max-request-headers",
+			create: func(t testinf.T) *proxycfg.ConfigSnapshot {
+				return proxycfg.TestConfigSnapshotAPIGateway(t, "default", nil, func(entry *structs.APIGatewayConfigEntry, bound *structs.BoundAPIGatewayConfigEntry) {
+					entry.Listeners = []structs.APIGatewayListener{
+						{
+							Name:                "http-listener",
+							Protocol:            structs.ListenerProtocolHTTP,
+							Port:                8080,
+							MaxRequestHeadersKB: uintPointer(96),
+						},
+					}
+					bound.Listeners = []structs.BoundAPIGatewayListener{
+						{
+							Name: "http-listener",
+							Routes: []structs.ResourceReference{
+								{
+									Name: "http-route",
+									Kind: structs.HTTPRoute,
+								},
+							},
+						},
+					}
+				}, []structs.BoundRoute{
+					&structs.HTTPRouteConfigEntry{
+						Kind: structs.HTTPRoute,
+						Name: "http-route",
+						Parents: []structs.ResourceReference{
+							{Kind: structs.APIGateway, Name: "api-gateway"},
+						},
+						Rules: []structs.HTTPRouteRule{
+							{
+								Services: []structs.HTTPService{{Name: "backend"}},
+							},
+						},
+					},
+				}, nil, nil)
+			},
+		},
+		{
+			name: "api-gateway-with-http-route-upstream-limits",
+			create: func(t testinf.T) *proxycfg.ConfigSnapshot {
+				return proxycfg.TestConfigSnapshotAPIGateway(t, "default", nil, func(entry *structs.APIGatewayConfigEntry, bound *structs.BoundAPIGatewayConfigEntry) {
+					entry.Defaults = &structs.UpstreamLimits{
+						MaxConnections:        intPointer(50),
+						MaxPendingRequests:    intPointer(100),
+						MaxConcurrentRequests: intPointer(200),
+					}
+					entry.Listeners = []structs.APIGatewayListener{
+						{
+							Name:     "http-listener",
+							Protocol: structs.ListenerProtocolHTTP,
+							Port:     8080,
+						},
+					}
+					bound.Listeners = []structs.BoundAPIGatewayListener{
+						{
+							Name: "http-listener",
+							Routes: []structs.ResourceReference{
+								{Name: "http-route", Kind: structs.HTTPRoute},
+							},
+						},
+					}
+				}, []structs.BoundRoute{
+					&structs.HTTPRouteConfigEntry{
+						Kind: structs.HTTPRoute,
+						Name: "http-route",
+						Parents: []structs.ResourceReference{
+							{Kind: structs.APIGateway, Name: "api-gateway"},
+						},
+						Rules: []structs.HTTPRouteRule{
+							{
+								// Override only MaxConnections; the gateway defaults for
+								// MaxPendingRequests and MaxConcurrentRequests are inherited.
+								Services: []structs.HTTPService{{
+									Name: "backend",
+									Limits: &structs.UpstreamLimits{
+										MaxConnections: intPointer(20),
+									},
+								}},
+							},
+						},
+					},
+				}, nil, nil)
+			},
+		},
+		{
+			name: "api-gateway-with-tcp-route-upstream-limits",
+			create: func(t testinf.T) *proxycfg.ConfigSnapshot {
+				return proxycfg.TestConfigSnapshotAPIGateway(t, "default", nil, func(entry *structs.APIGatewayConfigEntry, bound *structs.BoundAPIGatewayConfigEntry) {
+					entry.Defaults = &structs.UpstreamLimits{
+						MaxConnections:        intPointer(50),
+						MaxPendingRequests:    intPointer(100),
+						MaxConcurrentRequests: intPointer(200),
+					}
+					entry.Listeners = []structs.APIGatewayListener{
+						{
+							Name:     "tcp-listener",
+							Protocol: structs.ListenerProtocolTCP,
+							Port:     8080,
+						},
+					}
+					bound.Listeners = []structs.BoundAPIGatewayListener{
+						{
+							Name: "tcp-listener",
+							Routes: []structs.ResourceReference{
+								{Name: "tcp-route", Kind: structs.TCPRoute},
+							},
+						},
+					}
+				}, []structs.BoundRoute{
+					&structs.TCPRouteConfigEntry{
+						Kind: structs.TCPRoute,
+						Name: "tcp-route",
+						Parents: []structs.ResourceReference{
+							{Kind: structs.APIGateway, Name: "api-gateway"},
+						},
+						Services: []structs.TCPService{{Name: "tcp-backend"}},
+					},
+				}, nil, nil)
+			},
+		},
+		{
+			name: "api-gateway-with-upstream-passive-health-check",
+			create: func(t testinf.T) *proxycfg.ConfigSnapshot {
+				return proxycfg.TestConfigSnapshotAPIGateway(t, "default", nil, func(entry *structs.APIGatewayConfigEntry, bound *structs.BoundAPIGatewayConfigEntry) {
+					entry.Defaults = &structs.UpstreamLimits{
+						MaxConnections: intPointer(50),
+						PassiveHealthCheck: &structs.PassiveHealthCheck{
+							Interval:    10 * time.Second,
+							MaxFailures: 5,
+						},
+					}
+					entry.Listeners = []structs.APIGatewayListener{
+						{
+							Name:     "http-listener",
+							Protocol: structs.ListenerProtocolHTTP,
+							Port:     8080,
+						},
+					}
+					bound.Listeners = []structs.BoundAPIGatewayListener{
+						{
+							Name: "http-listener",
+							Routes: []structs.ResourceReference{
+								{Name: "http-route", Kind: structs.HTTPRoute},
+							},
+						},
+					}
+				}, []structs.BoundRoute{
+					&structs.HTTPRouteConfigEntry{
+						Kind: structs.HTTPRoute,
+						Name: "http-route",
+						Parents: []structs.ResourceReference{
+							{Kind: structs.APIGateway, Name: "api-gateway"},
+						},
+						Rules: []structs.HTTPRouteRule{
+							{
+								// Per-service override: change MaxConnections and PassiveHealthCheck.
+								// Interval/MaxFailures are replaced as a whole (not merged sub-field by sub-field).
+								Services: []structs.HTTPService{{
+									Name: "backend",
+									Limits: &structs.UpstreamLimits{
+										MaxConnections: intPointer(20),
+										PassiveHealthCheck: &structs.PassiveHealthCheck{
+											Interval:    5 * time.Second,
+											MaxFailures: 3,
+										},
+									},
+								}},
+							},
+						},
+					},
+				}, nil, nil)
+			},
+		},
+		{
+			// Route-only circuit breakers: no gateway Defaults at all.
+			// The service Limits on the route are the sole source of all three
+			// numeric fields, so the cluster must carry exactly those thresholds
+			// with no values inherited from an absent gateway default.
+			name: "api-gateway-with-route-only-limits",
+			create: func(t testinf.T) *proxycfg.ConfigSnapshot {
+				return proxycfg.TestConfigSnapshotAPIGateway(t, "default", nil, func(entry *structs.APIGatewayConfigEntry, bound *structs.BoundAPIGatewayConfigEntry) {
+					// No Defaults — gateway does not set any upstream limits.
+					entry.Listeners = []structs.APIGatewayListener{
+						{
+							Name:     "http-listener",
+							Protocol: structs.ListenerProtocolHTTP,
+							Port:     8080,
+						},
+					}
+					bound.Listeners = []structs.BoundAPIGatewayListener{
+						{
+							Name: "http-listener",
+							Routes: []structs.ResourceReference{
+								{Name: "http-route", Kind: structs.HTTPRoute},
+							},
+						},
+					}
+				}, []structs.BoundRoute{
+					&structs.HTTPRouteConfigEntry{
+						Kind: structs.HTTPRoute,
+						Name: "http-route",
+						Parents: []structs.ResourceReference{
+							{Kind: structs.APIGateway, Name: "api-gateway"},
+						},
+						Rules: []structs.HTTPRouteRule{
+							{
+								Services: []structs.HTTPService{{
+									Name: "payments",
+									Limits: &structs.UpstreamLimits{
+										MaxConnections:        intPointer(20),
+										MaxPendingRequests:    intPointer(40),
+										MaxConcurrentRequests: intPointer(80),
+									},
+								}},
+							},
+						},
+					},
+				}, nil, nil)
+			},
+		},
+		{
+			// Route-only passive health check: no gateway Defaults at all.
+			// The PassiveHealthCheck on the route service Limits is the sole
+			// source; the cluster must carry a fully-populated outlier_detection
+			// with no values inherited from an absent gateway default.
+			name: "api-gateway-with-route-only-passive-health-check",
+			create: func(t testinf.T) *proxycfg.ConfigSnapshot {
+				return proxycfg.TestConfigSnapshotAPIGateway(t, "default", nil, func(entry *structs.APIGatewayConfigEntry, bound *structs.BoundAPIGatewayConfigEntry) {
+					// No Defaults — gateway does not set any upstream limits.
+					entry.Listeners = []structs.APIGatewayListener{
+						{
+							Name:     "http-listener",
+							Protocol: structs.ListenerProtocolHTTP,
+							Port:     8080,
+						},
+					}
+					bound.Listeners = []structs.BoundAPIGatewayListener{
+						{
+							Name: "http-listener",
+							Routes: []structs.ResourceReference{
+								{Name: "http-route", Kind: structs.HTTPRoute},
+							},
+						},
+					}
+				}, []structs.BoundRoute{
+					&structs.HTTPRouteConfigEntry{
+						Kind: structs.HTTPRoute,
+						Name: "http-route",
+						Parents: []structs.ResourceReference{
+							{Kind: structs.APIGateway, Name: "api-gateway"},
+						},
+						Rules: []structs.HTTPRouteRule{
+							{
+								Services: []structs.HTTPService{{
+									Name: "payments",
+									Limits: &structs.UpstreamLimits{
+										MaxConnections: intPointer(30),
+										PassiveHealthCheck: &structs.PassiveHealthCheck{
+											Interval:    5 * time.Second,
+											MaxFailures: 3,
+										},
+									},
+								}},
+							},
+						},
+					},
+				}, nil, nil)
+			},
+		},
+	}
+}
+
+func getAPIGatewayPeeringGoldenTestCases(t *testing.T) []goldenTestCase {
+	// Test checks if API Gateway with peering, correctly generates
+	// the xDS resources for the upstream service in peer cluster.
+
+	t.Helper()
+	const peerTrustDomain = "1c053652-8512-4373-90cf-5a7f6263a994.consul"
+
+	// paymentService is the upstream service in peer cluster for gateway.
+	paymentService := structs.NewServiceName("paymentService", nil)
+	paymentServiceUID := proxycfg.NewUpstreamIDFromServiceName(paymentService)
+	paymentServiceUID.Peer = "paymentpeer"
+	paymentServiceDC := "paymentdc"
+	paymentServicePartition := "default"
+	paymentServiceNamespace := "default"
+
+	// Base entries for paymentService discovery chain.
+	//
+	// Discovery chain is required in case of API Gateway with peering,
+	// because we need service resolver to redirect request to peer.
+	// If paymentServiceSet is not provided, then api-gateway will work as simple api-gw
+	// without knowledge of peering and service resolver (no redirection to peer)
+	paymentServiceSet := configentry.NewDiscoveryChainSet()
+	paymentServiceSet.AddEntries(
+		&structs.ProxyConfigEntry{
+			Kind:   structs.ProxyDefaults,
+			Name:   structs.ProxyConfigGlobal,
+			Config: map[string]interface{}{"protocol": "http"},
+		},
+		&structs.ServiceResolverConfigEntry{
+			Kind: structs.ServiceResolver,
+			Name: paymentService.Name,
+			Redirect: &structs.ServiceResolverRedirect{
+				Peer: paymentServiceUID.Peer, // Redirect to peer
+			},
+		},
+	)
+	paymentServiceChain := discoverychain.TestCompileConfigEntries(
+		t,
+		paymentService.Name,
+		"default",
+		"default",
+		"dc1",
+		connect.TestClusterID+".consul",
+		// Below discovery chain (re)compile request is sent, so that
+		// we could get the updated localGatewayEndpoint.
+		//
+		// API Gateway does not directly update WatchedLocalGWEndpoints.
+		// It watches route config entries and upstream chains.
+		// So, after every update, DC recompile happens for API GW.
+		// Within recompile,it synthesize the listeners/routes, etc &
+		// then we would be able to get localGatewayEndpoint.
+		//
+		// Also, since we are recompiling the discovery chain,
+		// it prefix the clusterName with customizationHash
+		// while generating the cluster configs.
+		//
+		// Please note that:
+		// API Gateway, do not recomplile when "OverrideMeshGateway" changes.
+		// It do not set "OverrideMeshGateway" in discoveryChainWatchOpts.
+		// This is just to trigger the recompilation.
+		//
+		// MeshGateway mode is updated in TestConfigSnapshotAPIGateway,
+		// which updates the NodeService, and once the NodeService is modified,
+		// proxyCfg manager recreates the state (state config + serviceInstance).
+		func(req *discoverychain.CompileRequest) {
+			req.OverrideMeshGateway = structs.MeshGatewayConfig{Mode: structs.MeshGatewayModeLocal}
+		},
+		paymentServiceSet,
+	)
+
+	// generateNodeServiceTargetAddress generates tagged addresses
+	// for NodeService based on the upstream address type.
+	generateNodeServiceTargetAddress := func(peerServiceName, upstreamAddr string, upstreamAddrIsHostname bool) map[string]structs.ServiceAddress {
+		if upstreamAddrIsHostname {
+			return map[string]structs.ServiceAddress{
+				structs.TaggedAddressLAN: {
+					Address: upstreamAddr,
+					Port:    8443,
+				},
+				structs.TaggedAddressWAN: {
+					Address: peerServiceName + ".us-east-1.elb.notaws.com",
+					Port:    443,
+				},
+			}
+		}
+		return nil
+	}
+
+	newTestCase := func(name string, mgwMode structs.MeshGatewayMode, upstreamAddr string, upstreamAddrIsHostname bool) goldenTestCase {
+		tc := goldenTestCase{
+			name: name,
+			create: func(t testinf.T) *proxycfg.ConfigSnapshot {
+				proxyCfgUpdateEvents := []proxycfg.UpdateEvent{
+					// Inject Discovery Chain Events
+					// (because API Gateway uses serviceResolvers)
+					{
+						CorrelationID: "discovery-chain:" + paymentService.Name,
+						Result: &structs.DiscoveryChainResponse{
+							Chain: paymentServiceChain,
+						},
+					},
+					// Trust Bundles & Endpoints
+					{
+						CorrelationID: "peer-trust-bundle:" + paymentServiceUID.Peer,
+						Result: &pbpeering.TrustBundleReadResponse{
+							Bundle: &pbpeering.PeeringTrustBundle{
+								PeerName:          paymentServiceUID.Peer,
+								TrustDomain:       peerTrustDomain,
+								ExportedPartition: "default",
+								RootPEMs:          []string{paymentServiceUID.Peer + "-root"},
+							},
+						},
+					},
+					// Upstream nodes for the payment service in peer cluster.
+					{
+						CorrelationID: "upstream-peer:" + paymentServiceUID.String(),
+						Result: &structs.IndexedCheckServiceNodes{
+							Nodes: structs.CheckServiceNodes{
+								{
+									Node: &structs.Node{
+										ID:         "test1",
+										Node:       "test1",
+										Address:    upstreamAddr,
+										Datacenter: paymentServiceDC,
+									},
+									Service: &structs.NodeService{
+										Kind:            structs.ServiceKindAPIGateway,
+										Service:         "gateway",
+										Port:            8443,
+										TaggedAddresses: generateNodeServiceTargetAddress(paymentService.Name, upstreamAddr, upstreamAddrIsHostname),
+										Connect: structs.ServiceConnect{
+											PeerMeta: &structs.PeeringServiceMeta{
+												SNI: []string{
+													fmt.Sprintf("%s.%s.%s.%s.external.%s",
+														paymentService.Name, paymentServiceNamespace, paymentServicePartition, paymentServiceUID.Peer, peerTrustDomain),
+												},
+												SpiffeID: []string{
+													fmt.Sprintf("spiffe://%s/ns/default/dc/%s/svc/%s", peerTrustDomain, paymentServiceDC, paymentService.Name),
+												},
+												Protocol: "tcp",
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+					// Local mesh gateway node service, which will be used as a target when MeshGatewayMode is Local.
+					{
+						CorrelationID: "mesh-gateway:dc1",
+						Result: &structs.IndexedCheckServiceNodes{
+							Nodes: structs.CheckServiceNodes{
+								structs.CheckServiceNode{
+									Node: &structs.Node{
+										ID:         "mesh-gateway",
+										Node:       "mesh-gateway",
+										Address:    "10.45.1.1", // local mesh gateway
+										Datacenter: "dc1",
+									},
+									Service: &structs.NodeService{
+										Kind:    structs.ServiceKindMeshGateway,
+										Service: "mesh-gateway",
+										Port:    8443,
+										TaggedAddresses: map[string]structs.ServiceAddress{
+											structs.TaggedAddressWAN: {
+												Address: "172.100.0.14",
+												Port:    8080,
+											},
+										},
+										EnterpriseMeta: *structs.DefaultEnterpriseMetaInDefaultPartition(),
+									},
+								},
+							},
+						},
+					},
+				}
+
+				return proxycfg.TestConfigSnapshotAPIGateway(t, "default",
+					func(ns *structs.NodeService) {
+						// MeshGateway mode is updated here, which updates the NodeService,
+						// once the NodeService is modified,
+						// proxyCfg manager recreates the state (state config + serviceInstance).
+						// which will be populated when handling update in api_gateway.go.
+						// snap.APIGateway.Upstreams.set(ref, listener, set)
+						ns.Proxy.MeshGateway.Mode = mgwMode
+					},
+					func(entry *structs.APIGatewayConfigEntry, bound *structs.BoundAPIGatewayConfigEntry) {
+						entry.Listeners = []structs.APIGatewayListener{
+							{
+								Name:     "listener",
+								Protocol: structs.ListenerProtocolHTTP,
+								Port:     8080,
+							},
+						}
+						bound.Listeners = []structs.BoundAPIGatewayListener{
+							{
+								Name: "listener",
+								Routes: []structs.ResourceReference{
+									{
+										Name: "http-route",
+										Kind: structs.HTTPRoute,
+									},
+								},
+							},
+						}
+					},
+					[]structs.BoundRoute{
+						&structs.HTTPRouteConfigEntry{
+							Name: "http-route",
+							Kind: structs.HTTPRoute,
+							Parents: []structs.ResourceReference{
+								{
+									Kind: structs.APIGateway,
+									Name: "api-gateway",
+								},
+							},
+							Rules: []structs.HTTPRouteRule{
+								{
+									Services: []structs.HTTPService{
+										{Name: paymentService.Name},
+									},
+								},
+							},
+						},
+					},
+					nil,
+					proxyCfgUpdateEvents,
+				)
+			},
+		}
+		return tc
+	}
+
+	return []goldenTestCase{
+		newTestCase("api-gateway-with-peers-mesh-mode-local-and-upstream-is-hostname", structs.MeshGatewayModeLocal, "123.us-east-1.elb.notaws.com", true),
+		newTestCase("api-gateway-with-peers-mesh-mode-local-and-upstream-is-static", structs.MeshGatewayModeLocal, "172.68.1.1", false),
+		newTestCase("api-gateway-with-peers-mesh-mode-remote-and-upstream-is-hostname", structs.MeshGatewayModeRemote, "123.us-east-1.elb.notaws.com", true),
+		newTestCase("api-gateway-with-peers-mesh-mode-remote-and-upstream-is-static", structs.MeshGatewayModeRemote, "172.68.1.1", false),
 	}
 }
 
@@ -2312,6 +3092,27 @@ func getTerminatingGatewayPeeringGoldenTestCases() []goldenTestCase {
 		{
 			name:   "terminating-gateway-default-service-subset",
 			create: proxycfg.TestConfigSnapshotTerminatingGatewayDefaultServiceSubset,
+		},
+		{
+			name: "terminating-gateway-service-max-request-headers",
+			create: func(t testinf.T) *proxycfg.ConfigSnapshot {
+				// Use the HTTP2 test as base and modify it for our needs
+				snap := proxycfg.TestConfigSnapshotTerminatingGatewayHTTP2(t)
+
+				// Add service-specific max_request_headers_kb configuration for the web service
+				webService := structs.NewServiceName("web", nil)
+				if snap.TerminatingGateway.ServiceConfigs == nil {
+					snap.TerminatingGateway.ServiceConfigs = make(map[structs.ServiceName]*structs.ServiceConfigResponse)
+				}
+				snap.TerminatingGateway.ServiceConfigs[webService] = &structs.ServiceConfigResponse{
+					ProxyConfig: map[string]interface{}{
+						"max_request_headers_kb": uint32(96),
+						"protocol":               "http",
+					},
+				}
+
+				return snap
+			},
 		},
 	}
 }

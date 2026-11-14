@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package middleware
@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/armon/go-metrics"
 	"github.com/hashicorp/consul/agent/consul/rate"
 	"github.com/hashicorp/go-hclog"
+	"github.com/hashicorp/go-metrics"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -268,7 +268,7 @@ func TestRequestRecorder(t *testing.T) {
 			o := store.get(key)
 
 			require.Equal(t, o.key, metricRPCRequest)
-			require.LessOrEqual(t, o.elapsed, float32(time.Now().Sub(start).Microseconds())/1000)
+			require.LessOrEqual(t, o.elapsed, float32(time.Since(start).Microseconds())/1000)
 			require.Equal(t, o.labels, tc.expectedLabels)
 
 		})

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package envoy
@@ -86,7 +86,7 @@ func (s *ServiceAddressMapValue) String() string {
 	buf := new(strings.Builder)
 	for k, v := range s.value {
 		addr := net.JoinHostPort(v.Address, strconv.Itoa(v.Port))
-		buf.WriteString(fmt.Sprintf("%v=%v,", k, addr))
+		fmt.Fprintf(buf, "%v=%v,", k, addr)
 	}
 	return buf.String()
 }

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package sprawl
@@ -10,9 +10,11 @@ import (
 	"crypto/rand"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -624,7 +626,7 @@ func (s *Sprawl) SnapshotEnvoy(ctx context.Context) error {
 				if wrk.Disabled || wrk.EnvoyAdminPort <= 0 {
 					continue
 				}
-				prefix := fmt.Sprintf("http://%s:%d", n.LocalAddress(), wrk.EnvoyAdminPort)
+				prefix := net.JoinHostPort(n.LocalAddress(), strconv.Itoa(wrk.EnvoyAdminPort))
 
 				for fn, target := range targets {
 					u := prefix + "/" + target
@@ -764,6 +766,10 @@ func (s *Sprawl) dumpContainerLogs(ctx context.Context, containerName, outputRoo
 	return nil
 }
 
+func (s *Sprawl) CopyFileFromContainer(ctx context.Context, containerName, sourcePath, destPath string) error {
+	return s.runner.DockerExec(ctx, []string{"cp", containerName + ":" + sourcePath, destPath}, nil, nil)
+}
+
 func (s *Sprawl) GetFileFromContainer(ctx context.Context, containerName string, filePath string) error {
-	return s.runner.DockerExec(ctx, []string{"cp", containerName + ":" + filePath, filePath}, nil, nil)
+	return s.CopyFileFromContainer(ctx, containerName, filePath, filePath)
 }

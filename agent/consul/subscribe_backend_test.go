@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package consul
@@ -93,7 +93,7 @@ func TestSubscribeBackend_IntegrationWithServer_TLSEnabled(t *testing.T) {
 		require.NoError(t, err)
 
 		// Start a goroutine to read updates off the pbsubscribe.
-		eventCh := make(chan *pbsubscribe.Event, 0)
+		eventCh := make(chan *pbsubscribe.Event)
 		go receiveSubscribeEvents(t, eventCh, streamHandle)
 
 		var snapshotEvents []*pbsubscribe.Event
@@ -139,7 +139,7 @@ func TestSubscribeBackend_IntegrationWithServer_TLSEnabled(t *testing.T) {
 		require.NoError(t, err)
 
 		// Start a goroutine to read updates off the pbsubscribe.
-		eventCh := make(chan *pbsubscribe.Event, 0)
+		eventCh := make(chan *pbsubscribe.Event)
 		go receiveSubscribeEvents(t, eventCh, streamHandle)
 
 		var snapshotEvents []*pbsubscribe.Event
@@ -210,7 +210,7 @@ func TestSubscribeBackend_IntegrationWithServer_TLSReload(t *testing.T) {
 	require.NoError(t, err)
 
 	streamClient := pbsubscribe.NewStateChangeSubscriptionClient(conn)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	req := &pbsubscribe.SubscribeRequest{
 		Topic: pbsubscribe.Topic_ServiceHealth,
@@ -428,7 +428,7 @@ func verifyMonotonicStreamUpdates(ctx context.Context, logger testLogger, client
 	streamHandle, err := client.Subscribe(ctx, req)
 	switch {
 	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
-		logger.Logf("subscriber %05d: context cancelled before loop")
+		logger.Logf("subscriber: context cancelled before loop")
 		return nil
 	case err != nil:
 		return err

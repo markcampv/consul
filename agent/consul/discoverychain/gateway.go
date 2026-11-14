@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package discoverychain
@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/hashicorp/consul/acl"
 	"github.com/hashicorp/consul/agent/configentry"
 	"github.com/hashicorp/consul/agent/structs"
 )
@@ -17,13 +18,21 @@ import (
 // GatewayChainSynthesizer is used to synthesize a discovery chain for a
 // gateway from its configuration and multiple other discovery chains.
 type GatewayChainSynthesizer struct {
-	datacenter        string
-	trustDomain       string
-	suffix            string
-	gateway           *structs.APIGatewayConfigEntry
-	hostname          string
-	matchesByHostname map[string][]hostnameMatch
-	tcpRoutes         []structs.TCPRouteConfigEntry
+	datacenter             string
+	trustDomain            string
+	suffix                 string
+	gateway                *structs.APIGatewayConfigEntry
+	hostname               string
+	matchesByHostname      map[string][]hostnameMatch
+	tcpRoutes              []structs.TCPRouteConfigEntry
+	serviceRouters         map[structs.ServiceName][]*structs.ServiceRoute
+	composeUpstreamRouting bool
+}
+
+// EnableUpstreamRoutingComposition enables composition of API Gateway routes
+// with upstream service-router and service-resolver policy.
+func (l *GatewayChainSynthesizer) EnableUpstreamRoutingComposition() {
+	l.composeUpstreamRouting = true
 }
 
 type hostnameMatch struct {
@@ -108,23 +117,41 @@ func initHostMatches(hostname string, route *structs.HTTPRouteConfigEntry, curre
 // This is currently used to help API gateways masquarade as ingress gateways
 // by providing a set of virtual config entries that change the routing behavior
 // to upstreams referenced in the given HTTPRoutes or TCPRoutes.
-func (l *GatewayChainSynthesizer) Synthesize(chains ...*structs.CompiledDiscoveryChain) ([]structs.IngressService, []*structs.CompiledDiscoveryChain, error) {
+//
+// Routes whose synthetic chain fails to compile are skipped and their errors are returned
+// in the second return value so the caller can log warnings without aborting the rest of
+// the listener. This prevents a single misconfigured HTTPRoute (e.g. one whose backend
+// service-router redirects to a genuinely tcp-only service) from wiping the xDS config
+// for all other correctly-configured routes on the same listener.
+func (l *GatewayChainSynthesizer) Synthesize(chains ...*structs.CompiledDiscoveryChain) ([]structs.IngressService, []*structs.CompiledDiscoveryChain, []error, error) {
 	if len(chains) == 0 {
-		return nil, nil, fmt.Errorf("must provide at least one compiled discovery chain")
+		return nil, nil, nil, fmt.Errorf("must provide at least one compiled discovery chain")
 	}
 
+	if l.composeUpstreamRouting {
+		l.serviceRouters = serviceRouterRulesFromChains(chains)
+	}
 	services, set := l.synthesizeEntries()
+	var resolverEntries []*structs.ServiceResolverConfigEntry
+	if l.composeUpstreamRouting {
+		resolverEntries = resolverEntriesFromChains(chains)
+	}
 
 	if len(set) == 0 {
 		// we can't actually compile a discovery chain, i.e. we're using a TCPRoute-based listener, instead, just return the ingresses
 		// and the pre-compiled discovery chains
-		return services, chains, nil
+		return services, chains, nil, nil
 	}
 
+	var skipped []error
 	compiledChains := make([]*structs.CompiledDiscoveryChain, 0, len(set))
+	compiledServices := make([]structs.IngressService, 0, len(set))
 	for i, service := range services {
 
 		entries := set[i]
+		if len(resolverEntries) > 0 {
+			entries.AddResolvers(resolverEntries...)
+		}
 
 		compiled, err := Compile(CompileRequest{
 			ServiceName:           service.Name,
@@ -135,7 +162,12 @@ func (l *GatewayChainSynthesizer) Synthesize(chains ...*structs.CompiledDiscover
 			Entries:               entries,
 		})
 		if err != nil {
-			return nil, nil, err
+			// A compile error for one route (e.g. "inconsistent protocols" caused
+			// by a backend service-router redirecting to a tcp-only service) must
+			// not abort the entire listener. Skip this route, record the error for
+			// the caller to log as a warning, and continue with the remaining routes.
+			skipped = append(skipped, fmt.Errorf("skipping route for service %q: %w", service.Name, err))
+			continue
 		}
 
 		node := compiled.Nodes[compiled.StartNode]
@@ -187,9 +219,63 @@ func (l *GatewayChainSynthesizer) Synthesize(chains ...*structs.CompiledDiscover
 			compiled.EnvoyExtensions = append(compiled.EnvoyExtensions, c.EnvoyExtensions...)
 		}
 		compiledChains = append(compiledChains, compiled)
+		compiledServices = append(compiledServices, service)
 	}
 
-	return services, compiledChains, nil
+	return compiledServices, compiledChains, skipped, nil
+}
+
+// resolverEntriesFromChains builds minimal service-resolver entries that include
+// subset definitions from the real compiled chains. This allows gateway
+// synthesis to compile routes that reference service subsets.
+func resolverEntriesFromChains(chains []*structs.CompiledDiscoveryChain) []*structs.ServiceResolverConfigEntry {
+	out := []*structs.ServiceResolverConfigEntry{}
+	seen := map[structs.ServiceID]*structs.ServiceResolverConfigEntry{}
+
+	for _, chain := range chains {
+		if chain == nil {
+			continue
+		}
+		entMeta := acl.NewEnterpriseMetaWithPartition(chain.Partition, chain.Namespace)
+		sid := structs.NewServiceID(chain.ServiceName, &entMeta)
+
+		entry, ok := seen[sid]
+		if !ok {
+			entry = &structs.ServiceResolverConfigEntry{
+				Kind:           structs.ServiceResolver,
+				Name:           chain.ServiceName,
+				EnterpriseMeta: sid.EnterpriseMeta,
+				Subsets:        make(map[string]structs.ServiceResolverSubset),
+			}
+			seen[sid] = entry
+		}
+
+		for _, target := range chain.Targets {
+			if target == nil {
+				continue
+			}
+			if target.Service != chain.ServiceName {
+				continue
+			}
+			if target.Namespace != chain.Namespace || target.Partition != chain.Partition {
+				continue
+			}
+			if target.ServiceSubset == "" {
+				continue
+			}
+			if _, ok := entry.Subsets[target.ServiceSubset]; !ok {
+				entry.Subsets[target.ServiceSubset] = target.Subset
+			}
+		}
+	}
+
+	for _, entry := range seen {
+		if len(entry.Subsets) == 0 {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 // consolidateHTTPRoutes combines all rules into the shortest possible list of routes
@@ -290,7 +376,7 @@ func (l *GatewayChainSynthesizer) synthesizeEntries() ([]structs.IngressService,
 	entries := []*configentry.DiscoveryChainSet{}
 
 	for _, route := range l.consolidateHTTPRoutes() {
-		ingress, router, splitters, defaults := synthesizeHTTPRouteDiscoveryChain(route)
+		ingress, router, splitters, defaults := synthesizeHTTPRouteDiscoveryChain(route, l.serviceRouters, l.composeUpstreamRouting)
 
 		services = append(services, ingress)
 
@@ -306,4 +392,40 @@ func (l *GatewayChainSynthesizer) synthesizeEntries() ([]structs.IngressService,
 	}
 
 	return services, entries
+}
+
+func serviceRouterRulesFromChains(chains []*structs.CompiledDiscoveryChain) map[structs.ServiceName][]*structs.ServiceRoute {
+	out := make(map[structs.ServiceName][]*structs.ServiceRoute)
+	for _, chain := range chains {
+		if chain == nil {
+			continue
+		}
+		startNode := chain.Nodes[chain.StartNode]
+		if startNode == nil || !startNode.IsRouter() {
+			continue
+		}
+		routes := make([]*structs.ServiceRoute, 0, len(startNode.Routes))
+		for _, route := range startNode.Routes {
+			if route == nil || route.Definition == nil {
+				continue
+			}
+			def := route.Definition.DeepCopy()
+			// If the route destination doesn't include a subset, but the next
+			// resolver target does, propagate it. This ensures default-subset
+			// behavior is preserved when composing gateway routes.
+			if def.Destination != nil && def.Destination.ServiceSubset == "" {
+				if node := chain.Nodes[route.NextNode]; node != nil && node.IsResolver() && node.Resolver != nil {
+					if target := chain.Targets[node.Resolver.Target]; target != nil && target.ServiceSubset != "" {
+						def.Destination.ServiceSubset = target.ServiceSubset
+					}
+				}
+			}
+			routes = append(routes, def)
+		}
+		if len(routes) == 0 {
+			continue
+		}
+		out[chain.CompoundServiceName()] = routes
+	}
+	return out
 }

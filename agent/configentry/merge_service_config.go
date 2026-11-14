@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package configentry
@@ -168,7 +168,7 @@ func MergeServiceConfig(defaults *structs.ServiceConfigResponse, service *struct
 		// If the defaults did not fully normalize tenancy stuff, take care of
 		// that now too.
 		psn := us.Upstream // only normalize the copy
-		psn.ServiceName.EnterpriseMeta.Normalize()
+		psn.ServiceName.Normalize()
 
 		// Normalize the partition field specially.
 		if psn.Peer != "" {

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package consul
@@ -15,18 +15,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/armon/go-metrics"
-	"github.com/armon/go-metrics/prometheus"
 	"github.com/hashicorp/go-connlimit"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-memdb"
+	"github.com/hashicorp/go-metrics"
+	"github.com/hashicorp/go-metrics/prometheus"
 	"github.com/hashicorp/go-raftchunking"
 	"github.com/hashicorp/memberlist"
 	"github.com/hashicorp/raft"
 	"github.com/hashicorp/yamux"
 	"google.golang.org/grpc"
-
-	msgpackrpc "github.com/hashicorp/consul-net-rpc/net-rpc-msgpackrpc"
 
 	"github.com/hashicorp/consul/acl"
 	"github.com/hashicorp/consul/agent/blockingquery"
@@ -92,6 +90,12 @@ const (
 	// value is ever reached. However, it prevents us from blocking
 	// the requesting goroutine forever.
 	enqueueLimit = 30 * time.Second
+
+	// AnonymousAccessorID is the accessor ID for anonymous token.
+	anonymousAccessorID = "00000000-0000-0000-0000-000000000002"
+
+	// AnonymousSecretID is the secret ID for anonymous token
+	anonymousSecretID = "anonymous"
 )
 
 var ErrChunkingResubmit = errors.New("please resubmit call for rechunking")
@@ -240,8 +244,23 @@ func (s *Server) handleConn(conn net.Conn, isTLS bool) {
 			conn.Close()
 			return
 		}
-		conn = tls.Server(conn, s.tlsConfigurator.IncomingInsecureRPCConfig())
-		s.handleInsecureConn(conn)
+		tlsConn := tls.Server(conn, s.tlsConfigurator.IncomingInsecureRPCConfig())
+		// This protocol enters TLS without another magic-byte read to bound the handshake.
+		ctx := context.Background()
+		var cancel context.CancelFunc
+		if s.config.RPCHandshakeTimeout > 0 {
+			ctx, cancel = context.WithTimeout(ctx, s.config.RPCHandshakeTimeout)
+		}
+		err := tlsConn.HandshakeContext(ctx)
+		if cancel != nil {
+			cancel()
+		}
+		if err != nil {
+			s.rpcLogger().Error("TLS handshake failed", "conn", logConn(conn), "error", err)
+			tlsConn.Close()
+			return
+		}
+		s.handleInsecureConn(tlsConn)
 
 	case pool.RPCGRPC:
 		s.internalGRPCHandler.Handle(conn)
@@ -419,7 +438,10 @@ func (s *Server) handleMultiplexV2(conn net.Conn) {
 // handleConsulConn is used to service a single Consul RPC connection
 func (s *Server) handleConsulConn(conn net.Conn) {
 	defer conn.Close()
-	rpcCodec := msgpackrpc.NewCodecFromHandle(true, true, conn, structs.MsgpackHandle)
+
+	// Preserve read-ahead bytes across requests on the same connection.
+	rpcCodec := newBoundedHeaderCodec(conn, structs.MsgpackHandle, int(s.rpcMaxHeaderBytes.Load()), s.config.RPCHandshakeTimeout)
+
 	for {
 		select {
 		case <-s.shutdownCh:
@@ -427,7 +449,9 @@ func (s *Server) handleConsulConn(conn net.Conn) {
 		default:
 		}
 
-		if err := s.rpcServer.ServeRequest(rpcCodec); err != nil {
+		err := s.rpcServer.ServeRequest(rpcCodec)
+
+		if err != nil {
 			//EOF or closed are not considered as errors.
 			if err == io.EOF || strings.Contains(err.Error(), "closed") {
 				return
@@ -452,7 +476,9 @@ func (s *Server) handleConsulConn(conn net.Conn) {
 // handleInsecureConsulConn is used to service a single Consul INSECURERPC connection
 func (s *Server) handleInsecureConn(conn net.Conn) {
 	defer conn.Close()
-	rpcCodec := msgpackrpc.NewCodecFromHandle(true, true, conn, structs.MsgpackHandle)
+
+	rpcCodec := newBoundedHeaderCodec(conn, structs.MsgpackHandle, int(s.rpcMaxHeaderBytes.Load()), s.config.RPCHandshakeTimeout)
+
 	for {
 		select {
 		case <-s.shutdownCh:
@@ -460,7 +486,9 @@ func (s *Server) handleInsecureConn(conn net.Conn) {
 		default:
 		}
 
-		if err := s.insecureRPCServer.ServeRequest(rpcCodec); err != nil {
+		err := s.insecureRPCServer.ServeRequest(rpcCodec)
+
+		if err != nil {
 			if err != io.EOF && !strings.Contains(err.Error(), "closed") {
 				s.rpcLogger().Error("INSECURERPC error",
 					"conn", logConn(conn),
@@ -1045,7 +1073,7 @@ func (s *Server) SetQueryMeta(m blockingquery.ResponseMeta, token string) {
 		m.SetLastContact(time.Since(s.raft.LastContact()))
 		m.SetKnownLeader(s.raft.Leader() != "")
 	}
-	maskResultsFilteredByACLs(token, m)
+	maskResultsFilteredByACLs(token, m, s)
 
 	// Always set a non-zero QueryMeta.Index. Generally we expect the
 	// QueryMeta.Index to be set to structs.RaftIndex.ModifyIndex. If the query
@@ -1136,18 +1164,24 @@ func (s *Server) RPCQueryTimeout(queryTimeout time.Duration) time.Duration {
 //
 // Notes:
 //
-//   - The definition of "unauthenticated" here is incomplete, as it doesn't
-//     account for the fact that operators can modify the anonymous token with
-//     custom policies, or set namespace default policies. As these scenarios
-//     are less common and this flag is a best-effort UX improvement, we think
-//     the trade-off for reduced complexity is acceptable.
-//
 //   - This method assumes that the given token has already been validated (and
-//     will only check whether it is blank or not). It's a safe assumption because
+//     will only check whether it is blank or anonymous). It's a safe assumption because
 //     ResultsFilteredByACLs is only set to try when applying the already-resolved
 //     token's policies.
-func maskResultsFilteredByACLs(token string, meta blockingQueryResponseMeta) {
+func maskResultsFilteredByACLs(token string, m blockingQueryResponseMeta, s *Server) {
 	if token == "" {
-		meta.SetResultsFilteredByACLs(false)
+		m.SetResultsFilteredByACLs(false)
+		return
+	}
+
+	identity, err := s.resolveIdentityFromToken(token)
+	if err != nil {
+		s.rpcLogger().Debug("Failed to resolve identity from token", "token", token, "err", err)
+		m.SetResultsFilteredByACLs(false)
+		return
+	}
+
+	if identity.ID() == anonymousAccessorID && identity.SecretToken() == anonymousSecretID {
+		m.SetResultsFilteredByACLs(false)
 	}
 }

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package structs
@@ -53,6 +53,9 @@ const (
 	ACLPolicyGlobalReadOnlyDesc = "A built-in policy that grants read-only access to all Consul features"
 
 	ACLReservedIDPrefix = "00000000-0000-0000-0000-0000000000"
+
+	// DefaultACLAuthMethodTokenNameFormat default token name format
+	DefaultACLAuthMethodTokenNameFormat = "${auth_method_type}-${auth_method_name}"
 
 	aclPolicyGlobalRulesTemplate = `
 acl = "%[1]s"
@@ -286,6 +289,10 @@ func (ids ACLNodeIdentities) Deduplicate() ACLNodeIdentities {
 }
 
 type ACLToken struct {
+	// Name shows the name of the token generated from auth method TokenNameFormat.
+	// This is not mandatory to be unique and is not used for lookup purposes.
+	Name string `json:",omitempty"`
+
 	// This is the UUID used for tracking and management purposes
 	AccessorID string
 
@@ -343,6 +350,18 @@ type ACLToken struct {
 
 	// The time when this token was created
 	CreateTime time.Time `json:",omitempty"`
+
+	// IDPLogoutURL is a response-only field populated by the OIDC login
+	// callback when the IdP advertises an end_session_endpoint in its
+	// discovery document. It contains the provider's RP-Initiated logout URL
+	// (its end_session_endpoint with an id_token_hint) that the client uses
+	// during `consul logout` to terminate the IdP session: the CLI prints it
+	// for the user to open, and the UI opens it in a new tab.
+	//
+	// This field is NEVER persisted to the state store or Raft log and is not
+	// included in the token content Hash; it is only set on the RPC/HTTP
+	// response returned to the client that performed the login.
+	IDPLogoutURL string `json:",omitempty"`
 
 	// Hash of the contents of the token
 	//
@@ -534,7 +553,7 @@ func (t *ACLToken) SetHash(force bool) []byte {
 			templatedPolicy.AddToHash(hash)
 		}
 
-		t.EnterpriseMeta.AddToHash(hash, false)
+		t.AddToHash(hash, false)
 
 		// Finalize the hash
 		hashVal := hash.Sum(nil)
@@ -570,6 +589,7 @@ func (t *ACLToken) EstimateSize() int {
 type ACLTokens []*ACLToken
 
 type ACLTokenListStub struct {
+	Name              string `json:",omitempty"`
 	AccessorID        string
 	SecretID          string
 	Description       string
@@ -593,6 +613,7 @@ type ACLTokenListStubs []*ACLTokenListStub
 
 func (token *ACLToken) Stub() *ACLTokenListStub {
 	return &ACLTokenListStub{
+		Name:                        token.Name,
 		AccessorID:                  token.AccessorID,
 		SecretID:                    token.SecretID,
 		Description:                 token.Description,
@@ -736,7 +757,7 @@ func (p *ACLPolicy) SetHash(force bool) []byte {
 			hash.Write([]byte(dc))
 		}
 
-		p.EnterpriseMeta.AddToHash(hash, false)
+		p.AddToHash(hash, false)
 
 		// Finalize the hash
 		hashVal := hash.Sum(nil)
@@ -992,7 +1013,7 @@ func (r *ACLRole) SetHash(force bool) []byte {
 			templatedPolicy.AddToHash(hash)
 		}
 
-		r.EnterpriseMeta.AddToHash(hash, false)
+		r.AddToHash(hash, false)
 
 		// Finalize the hash
 		hashVal := hash.Sum(nil)
@@ -1156,28 +1177,30 @@ func (rules ACLBindingRules) Sort() {
 
 // Note: this is a subset of ACLAuthMethod's fields
 type ACLAuthMethodListStub struct {
-	Name          string
-	Type          string
-	DisplayName   string        `json:",omitempty"`
-	Description   string        `json:",omitempty"`
-	MaxTokenTTL   time.Duration `json:",omitempty"`
-	TokenLocality string        `json:",omitempty"`
-	CreateIndex   uint64
-	ModifyIndex   uint64
+	Name            string `json:",omitempty"`
+	Type            string
+	DisplayName     string        `json:",omitempty"`
+	Description     string        `json:",omitempty"`
+	MaxTokenTTL     time.Duration `json:",omitempty"`
+	TokenLocality   string        `json:",omitempty"`
+	TokenNameFormat string        `json:",omitempty"`
+	CreateIndex     uint64
+	ModifyIndex     uint64
 	acl.EnterpriseMeta
 }
 
 func (p *ACLAuthMethod) Stub() *ACLAuthMethodListStub {
 	return &ACLAuthMethodListStub{
-		Name:           p.Name,
-		Type:           p.Type,
-		DisplayName:    p.DisplayName,
-		Description:    p.Description,
-		MaxTokenTTL:    p.MaxTokenTTL,
-		TokenLocality:  p.TokenLocality,
-		CreateIndex:    p.CreateIndex,
-		ModifyIndex:    p.ModifyIndex,
-		EnterpriseMeta: p.EnterpriseMeta,
+		Name:            p.Name,
+		Type:            p.Type,
+		DisplayName:     p.DisplayName,
+		Description:     p.Description,
+		MaxTokenTTL:     p.MaxTokenTTL,
+		TokenLocality:   p.TokenLocality,
+		TokenNameFormat: p.TokenNameFormat,
+		CreateIndex:     p.CreateIndex,
+		ModifyIndex:     p.ModifyIndex,
+		EnterpriseMeta:  p.EnterpriseMeta,
 	}
 }
 
@@ -1242,6 +1265,9 @@ type ACLAuthMethod struct {
 	// This can be either 'local' or 'global'. If empty 'local' is assumed.
 	TokenLocality string `json:",omitempty"`
 
+	// TokenNameFormat defines the HIL template to use when building the token name
+	TokenNameFormat string `json:",omitempty"`
+
 	// Configuration is arbitrary configuration for the auth method. This
 	// should only contain primitive values and containers (such as lists and
 	// maps).
@@ -1295,6 +1321,25 @@ func (m *ACLAuthMethod) UnmarshalJSON(data []byte) (err error) {
 	}
 
 	return nil
+}
+
+func (m *ACLAuthMethod) GetClaimMappings() map[string]string {
+	if m.Config == nil || m.Config["ClaimMappings"] == nil {
+		return nil
+	}
+
+	claimMappings, ok := m.Config["ClaimMappings"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+
+	cm := make(map[string]string, len(claimMappings))
+	for k, v := range claimMappings {
+		cm[k] = v.(string)
+	}
+
+	return cm
+
 }
 
 type ACLReplicationType string

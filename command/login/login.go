@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package login
@@ -11,6 +11,7 @@ import (
 
 	"github.com/hashicorp/consul/api"
 	"github.com/hashicorp/consul/command/flags"
+	"github.com/hashicorp/consul/command/loginutil"
 	"github.com/hashicorp/consul/lib/file"
 	"github.com/mitchellh/cli"
 )
@@ -77,16 +78,16 @@ func (c *cmd) Run(args []string) int {
 		return 1
 	}
 	if len(c.flags.Args()) > 0 {
-		c.UI.Error(fmt.Sprintf("Should have no non-flag arguments."))
+		c.UI.Error("Should have no non-flag arguments.")
 		return 1
 	}
 
 	if c.authMethodName == "" {
-		c.UI.Error(fmt.Sprintf("Missing required '-method' flag"))
+		c.UI.Error("Missing required '-method' flag")
 		return 1
 	}
 	if c.tokenSinkFile == "" {
-		c.UI.Error(fmt.Sprintf("Missing required '-token-sink-file' flag"))
+		c.UI.Error("Missing required '-token-sink-file' flag")
 		return 1
 	}
 
@@ -156,12 +157,44 @@ func (c *cmd) bearerTokenLogin() int {
 		return 1
 	}
 
+	// When the auth method has IdP (RP-Initiated) logout enabled, the login
+	// response carries the provider's RP-Initiated logout URL. Persist it next
+	// to the token sink so `consul logout` can terminate the IdP session. This
+	// is a no-op when the field is empty (e.g. IdP logout disabled or the auth
+	// method type does not support it).
+	c.writeLogoutSinkFromToken(tok)
+
 	return 0
 }
 
 func (c *cmd) writeToSink(tok *api.ACLToken) error {
 	payload := []byte(tok.SecretID)
 	return file.WriteAtomicWithPerms(c.tokenSinkFile, payload, 0o755, 0o600)
+}
+
+// writeLogoutSinkFromToken persists the provider's RP-Initiated logout URL
+// (returned by the OIDC login callback when the IdP advertises an
+// end_session_endpoint) alongside the token sink file with owner-only
+// permissions. It is a no-op when the auth method did not return a logout URL
+// or when no token sink file is configured.
+func (c *cmd) writeLogoutSinkFromToken(tok *api.ACLToken) {
+	if c.tokenSinkFile == "" {
+		return
+	}
+	logoutSinkFile := c.tokenSinkFile + loginutil.IDPLogoutSuffix
+	if tok.IDPLogoutURL == "" {
+		// This token has no IdP logout URL. Remove any stale sidecar left by a
+		// previous OIDC login so a later `consul logout` does not open an
+		// outdated or unrelated IdP logout URL after destroying this token.
+		_ = os.Remove(logoutSinkFile)
+		return
+	}
+	if err := file.WriteAtomicWithPerms(logoutSinkFile, []byte(tok.IDPLogoutURL), 0o755, 0o600); err != nil {
+		// Remove any previous sidecar so a later `consul logout` cannot pair
+		// this new token with an older login's IdP logout URL.
+		_ = os.Remove(logoutSinkFile)
+		c.UI.Warn(fmt.Sprintf("Error writing IdP logout URL to file sink: %s", err))
+	}
 }
 
 func (c *cmd) Synopsis() string {

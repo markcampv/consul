@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package xds
@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/armon/go-metrics"
 	envoy_cluster_v3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	envoy_core_v3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	envoy_endpoint_v3 "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
@@ -25,6 +24,7 @@ import (
 	envoy_upstreams_v3 "github.com/envoyproxy/go-control-plane/envoy/extensions/upstreams/http/v3"
 	envoy_discovery_v3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 	envoy_type_v3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
+	"github.com/hashicorp/go-metrics"
 	"github.com/mitchellh/copystructure"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -34,6 +34,7 @@ import (
 
 	"github.com/hashicorp/consul/agent/connect"
 	"github.com/hashicorp/consul/agent/grpc-external/limiter"
+	"github.com/hashicorp/consul/agent/netutil"
 	"github.com/hashicorp/consul/agent/proxycfg"
 	"github.com/hashicorp/consul/agent/structs"
 	"github.com/hashicorp/consul/agent/xds/response"
@@ -62,7 +63,7 @@ func newTestSnapshot(
 	if dbServiceProtocol != "" {
 		// Simulate ServiceManager injection of protocol
 		snap.Proxy.Upstreams[0].Config["protocol"] = dbServiceProtocol
-		snap.ConnectProxy.ConfigSnapshotUpstreams.UpstreamConfig = proxycfg.UpstreamsToMap(snap.Proxy.Upstreams)
+		snap.ConnectProxy.UpstreamConfig = proxycfg.UpstreamsToMap(snap.Proxy.Upstreams)
 	}
 	return snap
 }
@@ -77,7 +78,7 @@ type testManager struct {
 	cancels              chan structs.ServiceID
 }
 
-func newTestManager(t *testing.T) *testManager {
+func newTestManager() *testManager {
 	return &testManager{
 		stateChans:           map[structs.ServiceID]chan *proxycfg.ConfigSnapshot{},
 		drainChans:           map[structs.ServiceID]chan struct{}{},
@@ -186,8 +187,10 @@ func newTestServerDeltaScenario(
 	token string,
 	authCheckFrequency time.Duration,
 ) *testServerScenario {
-	mgr := newTestManager(t)
+	mgr := newTestManager()
 	envoy := NewTestEnvoy(t, proxyID, token)
+	origGetAgentBindAddrFunc := netutil.GetAgentBindAddrFunc
+	netutil.GetAgentBindAddrFunc = netutil.GetMockGetAgentBindAddrFunc("0.0.0.0")
 
 	sink := metrics.NewInmemSink(1*time.Minute, 1*time.Minute)
 	cfg := metrics.DefaultConfig("consul.xds.test")
@@ -197,6 +200,7 @@ func newTestServerDeltaScenario(
 
 	t.Cleanup(func() {
 		envoy.Close()
+		netutil.GetAgentBindAddrFunc = origGetAgentBindAddrFunc
 		sink := &metrics.BlackholeSink{}
 		metrics.NewGlobal(cfg, sink)
 	})
@@ -295,17 +299,24 @@ func xdsNewTransportSocket(
 	// Assume just one root for now, can get fancier later if needed.
 	caPEM := snap.Roots.Roots[0].RootCert
 
-	commonTLSContext := &envoy_tls_v3.CommonTlsContext{
-		TlsParams: &envoy_tls_v3.TlsParameters{},
-		TlsCertificates: []*envoy_tls_v3.TlsCertificate{{
-			CertificateChain: xdsNewInlineString(snap.Leaf().CertPEM),
-			PrivateKey:       xdsNewInlineString(snap.Leaf().PrivateKeyPEM),
-		}},
-		ValidationContextType: &envoy_tls_v3.CommonTlsContext_ValidationContext{
-			ValidationContext: &envoy_tls_v3.CertificateValidationContext{
-				TrustedCa: xdsNewInlineString(caPEM),
+	var commonTLSContext *envoy_tls_v3.CommonTlsContext
+	if downstream {
+		// Downstream (public listener) Connect TLS is served via SDS so that
+		// leaf rotation does not rewrite the listener.
+		commonTLSContext = makeCommonConnectTLSContext(connectLeafSecretName, &envoy_tls_v3.TlsParameters{}, nil)
+	} else {
+		commonTLSContext = &envoy_tls_v3.CommonTlsContext{
+			TlsParams: &envoy_tls_v3.TlsParameters{},
+			TlsCertificates: []*envoy_tls_v3.TlsCertificate{{
+				CertificateChain: xdsNewInlineString(snap.Leaf().CertPEM),
+				PrivateKey:       xdsNewInlineString(snap.Leaf().PrivateKeyPEM),
+			}},
+			ValidationContextType: &envoy_tls_v3.CommonTlsContext_ValidationContext{
+				ValidationContext: &envoy_tls_v3.CertificateValidationContext{
+					TrustedCa: xdsNewInlineString(caPEM),
+				},
 			},
-		},
+		}
 	}
 	if len(spiffeID) > 0 {
 		require.NoError(t, injectSANMatcher(commonTLSContext, false, spiffeID...))

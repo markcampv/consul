@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package bindingruledelete
@@ -53,7 +53,7 @@ func (c *cmd) Run(args []string) int {
 	}
 
 	if c.ruleID == "" {
-		c.UI.Error(fmt.Sprintf("Must specify the -id parameter"))
+		c.UI.Error("Must specify the -id parameter")
 		return 1
 	}
 

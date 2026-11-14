@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package pbservice
@@ -13,6 +13,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	fuzz "github.com/google/gofuzz"
+	"github.com/stretchr/testify/require"
 
 	"github.com/hashicorp/consul/agent/structs"
 )
@@ -29,6 +30,101 @@ func TestNewCheckServiceNodeFromStructs_RoundTrip(t *testing.T) {
 		}
 		assertEqual(t, &target, result)
 	})
+}
+
+func TestServiceDefinition_RoundTrip(t *testing.T) {
+	repeat(t, func(t *testing.T, fuzzer *fuzz.Fuzzer) {
+		fuzzer.Funcs(randInt32, randUint32, randInterface, randStructsUpstream, randEnterpriseMeta, randStructsConnectProxyConfig)
+		var target structs.ServiceDefinition
+		fuzzer.Fuzz(&target)
+
+		result := ServiceDefinitionPtrToStructs(NewServiceDefinitionPtrFromStructs(&target))
+		assertEqual(t, &target, result)
+	})
+}
+
+// serviceAIRoleCases returns one representative ServiceAI payload per role,
+// exercising every nested sub-block.
+func serviceAIRoleCases() map[string]*structs.ServiceAI {
+	return map[string]*structs.ServiceAI{
+		"inference-model": {
+			Role: structs.ServiceAIRoleInferenceModel,
+			InferenceModel: &structs.AIInferenceModel{
+				Protocol: "openai",
+				Path:     "/v1",
+				Defaults: &structs.AIModelDefaults{MaxTokens: 2048, Temperature: 0.7},
+			},
+		},
+		"mcp-server": {
+			Role: structs.ServiceAIRoleMCPServer,
+			MCPServer: &structs.AIMCPServer{
+				Transport:       "streamable-http",
+				Path:            "/mcp",
+				ProtocolVersion: "2025-03-26",
+			},
+		},
+		"ai-agent": {
+			Role: structs.ServiceAIRoleAgent,
+			Agent: &structs.AIAgent{
+				Inference: &structs.AIAgentInference{Specialization: []string{"code"}, Vendor: "anthropic"},
+				MCP: &structs.AIAgentMCP{
+					Port: 15101,
+					HITL: &structs.AIAgentMCPHITL{
+						Port:            16101,
+						ApprovalTimeout: "60s",
+					},
+				},
+				RateLimits:  &structs.AIAgentRateLimits{ToolCallsPerMinute: 120, ToolCallsPerHour: 3000},
+				Interceptor: &structs.AIAgentInterceptor{Port: 21101},
+			},
+		},
+	}
+}
+
+// TestServiceAI_ServiceDefinition_RoundTrip_Explicit pins each role shape
+// on a ServiceDefinition, proving the AI field survives a
+// structs -> proto -> structs round trip through the generated converters.
+func TestServiceAI_ServiceDefinition_RoundTrip_Explicit(t *testing.T) {
+	for name, ai := range serviceAIRoleCases() {
+		ai := ai
+		t.Run(name, func(t *testing.T) {
+			orig := &structs.ServiceDefinition{Name: "ai-svc", AI: ai}
+			got := ServiceDefinitionPtrToStructs(NewServiceDefinitionPtrFromStructs(orig))
+			assertEqual(t, orig, got)
+		})
+	}
+}
+
+// TestServiceAI_NodeService_RoundTrip_Explicit pins each role shape on a
+// NodeService, proving the node.gen.go AI wiring is lossless.
+func TestServiceAI_NodeService_RoundTrip_Explicit(t *testing.T) {
+	for name, ai := range serviceAIRoleCases() {
+		ai := ai
+		t.Run(name, func(t *testing.T) {
+			orig := &structs.NodeService{Service: "ai-svc", AI: ai}
+
+			var pb NodeService
+			NodeServiceFromStructs(orig, &pb)
+
+			var got structs.NodeService
+			NodeServiceToStructs(&pb, &got)
+
+			assertEqual(t, orig, &got)
+		})
+	}
+}
+
+// TestServiceAI_Nil_RoundTrip proves a service without an ai block round-trips
+// with AI == nil (no empty-struct materialization) and that the pointer
+// wrappers are nil-safe in both directions.
+func TestServiceAI_Nil_RoundTrip(t *testing.T) {
+	require.Nil(t, ServiceAIPtrToStructs(nil))
+	require.Nil(t, NewServiceAIPtrFromStructs(nil))
+
+	orig := &structs.ServiceDefinition{Name: "plain"} // AI nil
+	got := ServiceDefinitionPtrToStructs(NewServiceDefinitionPtrFromStructs(orig))
+	require.Nil(t, got.AI)
+	assertEqual(t, orig, got)
 }
 
 func repeat(t *testing.T, fn func(t *testing.T, fuzzer *fuzz.Fuzzer)) {
@@ -69,12 +165,12 @@ func assertEqual(t *testing.T, x, y interface{}) {
 // practice they are constrained to 32 bits, and the protobuf types use (u)int32.
 // The structs types use (u)int64 for any fields that require 64 bits.
 func randUint32(i *uint, c fuzz.Continue) {
-	*i = uint(c.Rand.Uint32())
+	*i = uint(c.Uint32())
 }
 
 // see randUint32
 func randInt32(i *int, c fuzz.Continue) {
-	*i = int(c.Rand.Int31())
+	*i = int(c.Int31())
 }
 
 // randStructsConnectProxyConfig is a custom fuzzer function which skips
@@ -108,21 +204,21 @@ func randStructsUpstream(u *structs.Upstream, c fuzz.Continue) {
 // The random data does not contain any ints (or float32) because protobuf
 // converts them to float64, which will cause the test to fail.
 func randInterface(m *interface{}, c fuzz.Continue) {
-	switch c.Rand.Intn(6) {
+	switch c.Intn(6) {
 	case 0:
 		*m = nil
 	case 1:
 		*m = c.RandBool()
 	case 2:
-		*m = c.Rand.Float64()
+		*m = c.Float64()
 	case 3:
 		*m = c.RandString()
 	case 4:
-		*m = []interface{}{c.RandString(), c.RandBool(), nil, c.Rand.Float64()}
+		*m = []interface{}{c.RandString(), c.RandBool(), nil, c.Float64()}
 	case 5:
 		*m = map[string]interface{}{
 			c.RandString(): c.RandString(),
-			c.RandString(): c.Rand.Float64(),
+			c.RandString(): c.Float64(),
 			c.RandString(): nil,
 		}
 	}

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package consul
@@ -46,7 +46,7 @@ type AutoConfigAuthorizer interface {
 
 type disabledAuthorizer struct{}
 
-func (_ *disabledAuthorizer) Authorize(_ *pbautoconf.AutoConfigRequest) (AutoConfigOptions, error) {
+func (*disabledAuthorizer) Authorize(_ *pbautoconf.AutoConfigRequest) (AutoConfigOptions, error) {
 	return AutoConfigOptions{}, fmt.Errorf("Auto Config is disabled")
 }
 

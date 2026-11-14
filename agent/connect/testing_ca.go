@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package connect
@@ -17,8 +17,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/hashicorp/go-uuid"
 	"github.com/mitchellh/go-testing-interface"
+
+	"github.com/hashicorp/go-uuid"
 
 	"github.com/hashicorp/consul/acl"
 	"github.com/hashicorp/consul/agent/structs"
@@ -222,6 +223,9 @@ func testLeafWithID(t testing.T, spiffeId CertURI, dnsSAN string, root *structs.
 	if err != nil {
 		return "", "", fmt.Errorf("error getting CA key type: %s", err)
 	}
+	if dnsSAN == "" {
+		dnsSAN = "localhost"
+	}
 
 	// Cert template for generation
 	template := x509.Certificate{
@@ -241,7 +245,11 @@ func testLeafWithID(t testing.T, spiffeId CertURI, dnsSAN string, root *structs.
 		NotBefore:      time.Now(),
 		AuthorityKeyId: testKeyID(t, caSigner.Public()),
 		SubjectKeyId:   testKeyID(t, pkSigner.Public()),
-		DNSNames:       []string{dnsSAN},
+	}
+
+	// Only add DNS SANs if dnsSAN is not empty to avoid malformed SAN errors in Go 1.25.3+
+	if dnsSAN != "" {
+		template.DNSNames = []string{dnsSAN}
 	}
 
 	// Create the certificate, PEM encode it and return that value.
@@ -334,7 +342,7 @@ func TestServerLeaf(t testing.T, dc string, root *structs.CARoot) (string, strin
 
 // TestCSR returns a CSR to sign the given service along with the PEM-encoded
 // private key for this certificate.
-func TestCSR(t testing.T, uri CertURI) (string, string) {
+func TestCSR(t Fatalfer, uri CertURI) (string, string) {
 	template := &x509.CertificateRequest{
 		URIs:               []*url.URL{uri.URI()},
 		SignatureAlgorithm: x509.ECDSAWithSHA256,
@@ -387,13 +395,20 @@ func testKeyID(t testing.T, raw interface{}) []byte {
 // which will be the same for multiple CAs/Leafs. Also note that our UUID
 // generator also reads from crypto rand and is called far more often during
 // tests than this will be.
-func testPrivateKey(t testing.T, keyType string, keyBits int) (crypto.Signer, string) {
+func testPrivateKey(t Fatalfer, keyType string, keyBits int) (crypto.Signer, string) {
 	pk, pkPEM, err := GeneratePrivateKeyWithConfig(keyType, keyBits)
 	if err != nil {
 		t.Fatalf("error generating private key: %s", err)
 	}
 
 	return pk, pkPEM
+}
+
+// Fatalfer is a subset of testing.T that only has the Fatalf method. This is
+// used to avoid import cycles in the connect package, since we use this in
+// places that need to call Fatalf but don't need the full testing.T interface.
+type Fatalfer interface {
+	Fatalf(format string, args ...any)
 }
 
 // testSerialNumber generates a serial number suitable for a certificate. For

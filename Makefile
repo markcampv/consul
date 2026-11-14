@@ -10,15 +10,15 @@ GO_MODULES := $(shell find . -name go.mod -exec dirname {} \; | grep -v "proto-g
 # These version variables can either be a valid string for "go install <module>@<version>"
 # or the string @DEV to imply use what is currently installed locally.
 ###
-GOLANGCI_LINT_VERSION='v1.61.0'
-MOCKERY_VERSION='v2.41.0'
-BUF_VERSION='v1.26.0'
+GOLANGCI_LINT_VERSION='v2.11.4'
+MOCKERY_VERSION='v3.5.2'
+BUF_VERSION='v1.56.0'
 
-PROTOC_GEN_GO_GRPC_VERSION='v1.2.0'
-MOG_VERSION='v0.4.2'
+PROTOC_GEN_GO_GRPC_VERSION='v1.5.1'
+MOG_VERSION='ee61dbb3714674e897406d364d14c6d2e6b2e89f'
 PROTOC_GO_INJECT_TAG_VERSION='v1.3.0'
 PROTOC_GEN_GO_BINARY_VERSION='v0.1.0'
-DEEP_COPY_VERSION='e112476c0181d3d69067bac191f9b6bcda2ce812'
+DEEP_COPY_VERSION='7cda106f7b4b4e5006f0d663a2f768659809efbc'
 COPYWRITE_TOOL_VERSION='v0.16.4'
 LINT_CONSUL_RETRY_VERSION='v1.4.0'
 # Go imports formatter
@@ -26,7 +26,7 @@ GCI_VERSION='v0.11.2'
 
 MOCKED_PB_DIRS= pbdns
 
-GOTAGS ?=
+GOTAGS ?= hashicorpmetrics
 GOPATH=$(shell go env GOPATH)
 GOARCH?=$(shell go env GOARCH)
 MAIN_GOPATH=$(shell go env GOPATH | cut -d: -f1)
@@ -479,7 +479,7 @@ test-connect-ca-providers: ## Running /agent/connect/ca tests in verbose mode
 ui: ui-docker ## Build the static web ui inside a Docker container. For local testing only; do not commit these assets.
 
 .PHONY: ui-regen
-ui-regen: ## Build the static web ui with yarn. This is the version to commit.
+ui-regen: ## Build the static web ui. This is the version to commit.
 	cd $(CURDIR)/ui && make && cd ..
 	rm -rf $(CURDIR)/agent/uiserver/dist
 	mv $(CURDIR)/ui/packages/consul-ui/dist $(CURDIR)/agent/uiserver/
@@ -523,10 +523,6 @@ print-%  : ; @echo $($*) ## utility to echo a makefile variable (i.e. 'make prin
 .PHONY: module-versions
 module-versions: ## Print a list of modules which can be updated. Columns are: module current_version date_of_current_version latest_version
 	@go list -m -u -f '{{if .Update}} {{printf "%-50v %-40s" .Path .Version}} {{with .Time}} {{ .Format "2006-01-02" -}} {{else}} {{printf "%9s" ""}} {{end}}   {{ .Update.Version}} {{end}}' all
-
-.PHONY: docs
-docs: ## Point your web browser to http://localhost:3000/consul to live render docs from ./website/
-	make -C website
 
 ##@ Release
 

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package templatedpolicy
@@ -64,8 +64,8 @@ type prettyFormatter struct {
 func (f *prettyFormatter) FormatTemplatedPolicy(templatedPolicy api.ACLTemplatedPolicyResponse) (string, error) {
 	var buffer bytes.Buffer
 
-	buffer.WriteString(fmt.Sprintf("Name:            %s\n", templatedPolicy.TemplateName))
-	buffer.WriteString(fmt.Sprintf("Description:     %s\n", templatedPolicy.Description))
+	fmt.Fprintf(&buffer, "Name:            %s\n", templatedPolicy.TemplateName)
+	fmt.Fprintf(&buffer, "Description:     %s\n", templatedPolicy.Description)
 
 	buffer.WriteString("Input variables:")
 	switch templatedPolicy.TemplateName {
@@ -83,9 +83,9 @@ func (f *prettyFormatter) FormatTemplatedPolicy(templatedPolicy api.ACLTemplated
 
 	if f.showMeta {
 		if templatedPolicy.Schema != "" {
-			buffer.WriteString(fmt.Sprintf("Schema:\n%s\n\n", templatedPolicy.Schema))
+			fmt.Fprintf(&buffer, "Schema:\n%s\n\n", templatedPolicy.Schema)
 		}
-		buffer.WriteString(fmt.Sprintf("Raw Template:\n%s\n", templatedPolicy.Template))
+		fmt.Fprintf(&buffer, "Raw Template:\n%s\n", templatedPolicy.Template)
 	}
 
 	return buffer.String(), nil
@@ -94,13 +94,13 @@ func (f *prettyFormatter) FormatTemplatedPolicy(templatedPolicy api.ACLTemplated
 func noRequiredVariablesOutput(buffer *bytes.Buffer, templateName string) {
 	buffer.WriteString(" None\n")
 	buffer.WriteString("Example usage:\n")
-	buffer.WriteString(fmt.Sprintf("%sconsul acl token create -templated-policy %s\n", WhitespaceIndent, templateName))
+	fmt.Fprintf(buffer, "%sconsul acl token create -templated-policy %s\n", WhitespaceIndent, templateName)
 }
 
 func nameRequiredVariableOutput(buffer *bytes.Buffer, templateName, description, exampleName string) {
-	buffer.WriteString(fmt.Sprintf("\n%sName: String - Required - %s.\n", WhitespaceIndent, description))
+	fmt.Fprintf(buffer, "\n%sName: String - Required - %s.\n", WhitespaceIndent, description)
 	buffer.WriteString("Example usage:\n")
-	buffer.WriteString(fmt.Sprintf("%sconsul acl token create -templated-policy %s -var name:%s\n", WhitespaceIndent, templateName, exampleName))
+	fmt.Fprintf(buffer, "%sconsul acl token create -templated-policy %s -var name:%s\n", WhitespaceIndent, templateName, exampleName)
 }
 
 func (f *prettyFormatter) FormatTemplatedPolicyList(policies map[string]api.ACLTemplatedPolicyResponse) (string, error) {
@@ -114,7 +114,7 @@ func (f *prettyFormatter) FormatTemplatedPolicyList(policies map[string]api.ACLT
 	//ensure the list is consistently sorted by strings
 	sort.Strings(templateNames)
 	for _, name := range templateNames {
-		buffer.WriteString(fmt.Sprintf("%s\n", name))
+		fmt.Fprintf(&buffer, "%s\n", name)
 	}
 
 	return buffer.String(), nil

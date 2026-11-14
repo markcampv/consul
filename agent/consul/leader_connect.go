@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package consul
@@ -140,7 +140,7 @@ func (s *Server) pruneCARoots() error {
 
 	var newRoots structs.CARoots
 	for _, r := range roots {
-		if !r.Active && !r.RotatedOutAt.IsZero() && time.Now().Sub(r.RotatedOutAt) > common.LeafCertTTL*2 {
+		if !r.Active && !r.RotatedOutAt.IsZero() && time.Since(r.RotatedOutAt) > common.LeafCertTTL*2 {
 			s.loggers.Named(logging.Connect).Info("pruning old unused root CA", "id", r.ID)
 			continue
 		}

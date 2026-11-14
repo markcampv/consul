@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -17,6 +17,17 @@ export default ChildSelectorComponent.extend({
   type: 'policy',
   allowIdentity: true,
   classNames: ['policy-selector'],
+  confirmRemove: function (item, removeFn) {
+    set(this, 'policyToRemove', { item, removeFn });
+  },
+  cancelRemove: function () {
+    set(this, 'policyToRemove', null);
+  },
+  invokeRemove: function () {
+    const { item, removeFn } = this.policyToRemove;
+    removeFn(item, this.items);
+    set(this, 'policyToRemove', null);
+  },
   init: function () {
     this._super(...arguments);
     const source = this.source;
@@ -32,9 +43,12 @@ export default ChildSelectorComponent.extend({
     this._super(...arguments);
     set(this, 'isScoped', false);
   },
-  refreshCodeEditor: function (e, target) {
-    const selector = '.code-editor';
-    this.dom.component(selector, target).didAppear();
+  refreshCodeEditor: function () {
+    // Could be better, but this is a hack to clear the code editor
+    const codeEditor = document.querySelector('[aria-label="policy[Rules]"]');
+    if (codeEditor) {
+      codeEditor.innerHTML = '';
+    }
   },
   error: function (e) {
     const item = this.item;
@@ -71,7 +85,7 @@ export default ChildSelectorComponent.extend({
   },
   actions: {
     open: function (e) {
-      this.refreshCodeEditor(e, e.target.parentElement);
+      this.refreshCodeEditor();
     },
   },
 });

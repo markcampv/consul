@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package proxycfg
@@ -21,6 +21,7 @@ import (
 	"github.com/hashicorp/consul/agent/cache"
 	cachetype "github.com/hashicorp/consul/agent/cache-types"
 	"github.com/hashicorp/consul/agent/connect"
+	"github.com/hashicorp/consul/agent/featuregate"
 	"github.com/hashicorp/consul/agent/leafcert"
 	"github.com/hashicorp/consul/agent/structs"
 	"github.com/hashicorp/consul/api"
@@ -395,7 +396,7 @@ func TestGatewayNodesDC1(t testing.T) structs.CheckServiceNodes {
 				Address:    "10.10.1.1",
 				Datacenter: "dc1",
 			},
-			Service: structs.TestNodeServiceMeshGatewayWithAddrs(t,
+			Service: structs.TestNodeServiceMeshGatewayWithAddrs(
 				"10.10.1.1", 8443,
 				structs.ServiceAddress{Address: "10.10.1.1", Port: 8443},
 				structs.ServiceAddress{Address: "198.118.1.1", Port: 443}),
@@ -407,7 +408,7 @@ func TestGatewayNodesDC1(t testing.T) structs.CheckServiceNodes {
 				Address:    "10.10.1.2",
 				Datacenter: "dc1",
 			},
-			Service: structs.TestNodeServiceMeshGatewayWithAddrs(t,
+			Service: structs.TestNodeServiceMeshGatewayWithAddrs(
 				"10.10.1.2", 8443,
 				structs.ServiceAddress{Address: "10.0.1.2", Port: 8443},
 				structs.ServiceAddress{Address: "198.118.1.2", Port: 443}),
@@ -424,7 +425,7 @@ func TestGatewayNodesDC2(t testing.T) structs.CheckServiceNodes {
 				Address:    "10.0.1.1",
 				Datacenter: "dc2",
 			},
-			Service: structs.TestNodeServiceMeshGatewayWithAddrs(t,
+			Service: structs.TestNodeServiceMeshGatewayWithAddrs(
 				"10.0.1.1", 8443,
 				structs.ServiceAddress{Address: "10.0.1.1", Port: 8443},
 				structs.ServiceAddress{Address: "198.18.1.1", Port: 443}),
@@ -436,7 +437,7 @@ func TestGatewayNodesDC2(t testing.T) structs.CheckServiceNodes {
 				Address:    "10.0.1.2",
 				Datacenter: "dc2",
 			},
-			Service: structs.TestNodeServiceMeshGatewayWithAddrs(t,
+			Service: structs.TestNodeServiceMeshGatewayWithAddrs(
 				"10.0.1.2", 8443,
 				structs.ServiceAddress{Address: "10.0.1.2", Port: 8443},
 				structs.ServiceAddress{Address: "198.18.1.2", Port: 443}),
@@ -453,7 +454,7 @@ func TestGatewayNodesDC3(t testing.T) structs.CheckServiceNodes {
 				Address:    "10.30.1.1",
 				Datacenter: "dc3",
 			},
-			Service: structs.TestNodeServiceMeshGatewayWithAddrs(t,
+			Service: structs.TestNodeServiceMeshGatewayWithAddrs(
 				"10.30.1.1", 8443,
 				structs.ServiceAddress{Address: "10.0.1.1", Port: 8443},
 				structs.ServiceAddress{Address: "198.38.1.1", Port: 443}),
@@ -465,7 +466,7 @@ func TestGatewayNodesDC3(t testing.T) structs.CheckServiceNodes {
 				Address:    "10.30.1.2",
 				Datacenter: "dc3",
 			},
-			Service: structs.TestNodeServiceMeshGatewayWithAddrs(t,
+			Service: structs.TestNodeServiceMeshGatewayWithAddrs(
 				"10.30.1.2", 8443,
 				structs.ServiceAddress{Address: "10.30.1.2", Port: 8443},
 				structs.ServiceAddress{Address: "198.38.1.2", Port: 443}),
@@ -482,7 +483,7 @@ func TestGatewayNodesDC4Hostname(t testing.T) structs.CheckServiceNodes {
 				Address:    "10.30.1.1",
 				Datacenter: "dc4",
 			},
-			Service: structs.TestNodeServiceMeshGatewayWithAddrs(t,
+			Service: structs.TestNodeServiceMeshGatewayWithAddrs(
 				"10.30.1.1", 8443,
 				structs.ServiceAddress{Address: "10.0.1.1", Port: 8443},
 				structs.ServiceAddress{Address: "123.us-west-2.elb.notaws.com", Port: 443}),
@@ -494,7 +495,7 @@ func TestGatewayNodesDC4Hostname(t testing.T) structs.CheckServiceNodes {
 				Address:    "10.30.1.2",
 				Datacenter: "dc4",
 			},
-			Service: structs.TestNodeServiceMeshGatewayWithAddrs(t,
+			Service: structs.TestNodeServiceMeshGatewayWithAddrs(
 				"10.30.1.2", 8443,
 				structs.ServiceAddress{Address: "10.30.1.2", Port: 8443},
 				structs.ServiceAddress{Address: "456.us-west-2.elb.notaws.com", Port: 443}),
@@ -506,7 +507,7 @@ func TestGatewayNodesDC4Hostname(t testing.T) structs.CheckServiceNodes {
 				Address:    "10.30.1.3",
 				Datacenter: "dc4",
 			},
-			Service: structs.TestNodeServiceMeshGatewayWithAddrs(t,
+			Service: structs.TestNodeServiceMeshGatewayWithAddrs(
 				"10.30.1.3", 8443,
 				structs.ServiceAddress{Address: "10.30.1.3", Port: 8443},
 				structs.ServiceAddress{Address: "198.38.1.1", Port: 443}),
@@ -523,7 +524,7 @@ func TestGatewayNodesDC5Hostname(t testing.T) structs.CheckServiceNodes {
 				Address:    "10.30.1.1",
 				Datacenter: "dc5",
 			},
-			Service: structs.TestNodeServiceMeshGatewayWithAddrs(t,
+			Service: structs.TestNodeServiceMeshGatewayWithAddrs(
 				"10.30.1.1", 8443,
 				structs.ServiceAddress{Address: "10.0.1.1", Port: 8443},
 				structs.ServiceAddress{Address: "123.us-west-2.elb.notaws.com", Port: 443}),
@@ -535,7 +536,7 @@ func TestGatewayNodesDC5Hostname(t testing.T) structs.CheckServiceNodes {
 				Address:    "10.30.1.2",
 				Datacenter: "dc5",
 			},
-			Service: structs.TestNodeServiceMeshGatewayWithAddrs(t,
+			Service: structs.TestNodeServiceMeshGatewayWithAddrs(
 				"10.30.1.2", 8443,
 				structs.ServiceAddress{Address: "10.30.1.2", Port: 8443},
 				structs.ServiceAddress{Address: "456.us-west-2.elb.notaws.com", Port: 443}),
@@ -547,7 +548,7 @@ func TestGatewayNodesDC5Hostname(t testing.T) structs.CheckServiceNodes {
 				Address:    "10.30.1.3",
 				Datacenter: "dc5",
 			},
-			Service: structs.TestNodeServiceMeshGatewayWithAddrs(t,
+			Service: structs.TestNodeServiceMeshGatewayWithAddrs(
 				"10.30.1.3", 8443,
 				structs.ServiceAddress{Address: "10.30.1.3", Port: 8443},
 				structs.ServiceAddress{Address: "198.38.1.1", Port: 443}),
@@ -564,7 +565,7 @@ func TestGatewayNodesDC6Hostname(t testing.T) structs.CheckServiceNodes {
 				Address:    "10.30.1.1",
 				Datacenter: "dc6",
 			},
-			Service: structs.TestNodeServiceMeshGatewayWithAddrs(t,
+			Service: structs.TestNodeServiceMeshGatewayWithAddrs(
 				"10.30.1.1", 8443,
 				structs.ServiceAddress{Address: "10.0.1.1", Port: 8443},
 				structs.ServiceAddress{Address: "123.us-east-1.elb.notaws.com", Port: 443}),
@@ -748,6 +749,15 @@ func (*noopDataSource[ReqType]) Notify(context.Context, ReqType, string, chan<- 
 	return nil
 }
 
+// staticFeatureGate is a minimal featuregate.Gate used by test fixtures to
+// enable a fixed set of features without requiring the full Store/Resolve
+// machinery.
+type staticFeatureGate map[string]bool
+
+func (g staticFeatureGate) Enabled(feature featuregate.Feature) bool {
+	return g[feature.String()]
+}
+
 // testConfigSnapshotFixture helps you execute normal proxycfg event machinery
 // to assemble a ConfigSnapshot via standard means to ensure test data used in
 // any tests is actually a valid configuration.
@@ -806,6 +816,11 @@ func testConfigSnapshotFixture(
 		},
 		serverSNIFn:           serverSNIFn,
 		intentionDefaultAllow: false, // TODO: make configurable
+		// Enable localized DNS by default in test fixtures so existing tests
+		// continue to exercise the inline/egress DNS listener code paths. Tests
+		// that need to verify the disabled behavior can override
+		// stateConfig.featureGate directly.
+		featureGate: staticFeatureGate{featuregate.LocalizedDNS.String(): true},
 	}
 	testConfigSnapshotFixtureEnterprise(&config)
 	s, err := newServiceInstanceFromNodeService(ProxyID{ServiceID: ns.CompoundServiceID()}, ns, token)

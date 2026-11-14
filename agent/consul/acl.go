@@ -1,18 +1,19 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package consul
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"sort"
 	"sync"
 	"time"
 
-	"github.com/armon/go-metrics"
-	"github.com/armon/go-metrics/prometheus"
 	"github.com/hashicorp/go-hclog"
+	"github.com/hashicorp/go-metrics"
+	"github.com/hashicorp/go-metrics/prometheus"
 	"golang.org/x/sync/singleflight"
 	"golang.org/x/time/rate"
 
@@ -969,7 +970,7 @@ func (r *ACLResolver) resolveTokenToIdentityAndPolicies(token string) (structs.A
 		lastErr = err
 
 		if tokenErr, ok := err.(*policyOrRoleTokenError); ok {
-			if acl.IsErrNotFound(err) && tokenErr.token == identity.SecretToken() {
+			if acl.IsErrNotFound(err) && subtle.ConstantTimeCompare([]byte(tokenErr.token), []byte(identity.SecretToken())) == 1 {
 				// token was deleted while resolving policies
 				return nil, nil, acl.ErrNotFound
 			}
@@ -1008,8 +1009,7 @@ func (r *ACLResolver) resolveTokenToIdentityAndRoles(token string) (structs.ACLI
 		lastErr = err
 
 		if tokenErr, ok := err.(*policyOrRoleTokenError); ok {
-			if acl.IsErrNotFound(err) && tokenErr.token == identity.SecretToken() {
-				// token was deleted while resolving roles
+			if acl.IsErrNotFound(err) && subtle.ConstantTimeCompare([]byte(tokenErr.token), []byte(identity.SecretToken())) == 1 { // token was deleted while resolving roles
 				return nil, nil, acl.ErrNotFound
 			}
 

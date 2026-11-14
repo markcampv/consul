@@ -1,17 +1,29 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 import Component from '@ember/component';
+import { set } from '@ember/object';
 
 export default Component.extend({
   tagName: '',
+  isPermissionModalOpen: false,
 
-  shouldShowPermissionForm: false,
+  openModal(permission) {
+    if (permission !== undefined) {
+      set(this, 'permission', permission);
+    }
+    set(this, 'isPermissionModalOpen', true);
+  },
 
-  openModal() {
-    this.modal?.open();
+  closeModal() {
+    set(this, 'isPermissionModalOpen', false);
+    set(this, 'permission', undefined);
+  },
+
+  setPermission(permission) {
+    set(this, 'permission', permission);
   },
 
   actions: {
@@ -19,7 +31,7 @@ export default Component.extend({
       return template.replace(/{{term}}/g, term);
     },
     isUnique: function (items, term) {
-      return !items.findBy('Name', term);
+      return !items.find((item) => item.Name === term);
     },
     add: function (name, changeset, value) {
       if (!(changeset.get(name) || []).includes(value)) {

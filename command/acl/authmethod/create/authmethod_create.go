@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package authmethodcreate
@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hashicorp/consul/agent/structs"
 	"github.com/hashicorp/consul/api"
 	"github.com/hashicorp/consul/command/acl/authmethod"
 	"github.com/hashicorp/consul/command/flags"
@@ -37,6 +38,8 @@ type cmd struct {
 	maxTokenTTL    time.Duration
 	tokenLocality  string
 	config         string
+
+	tokenNameFormat string
 
 	k8sHost              string
 	k8sCACert            string
@@ -136,6 +139,12 @@ func (c *cmd) init() {
 			"to indicate that the value is a file path to load the config from. '-' may also be "+
 			"given to indicate that the config is available on stdin",
 	)
+	c.flags.StringVar(
+		&c.tokenNameFormat,
+		"token-name-format",
+		structs.DefaultACLAuthMethodTokenNameFormat,
+		"Format used to specify the token name for the auth method. HashiCorp HIL syntax is supported.",
+	)
 
 	c.initEnterpriseFlags()
 
@@ -152,11 +161,11 @@ func (c *cmd) Run(args []string) int {
 	}
 
 	if c.authMethodType == "" {
-		c.UI.Error(fmt.Sprintf("Missing required '-type' flag"))
+		c.UI.Error("Missing required '-type' flag")
 		c.UI.Error(c.Help())
 		return 1
 	} else if c.name == "" {
-		c.UI.Error(fmt.Sprintf("Missing required '-name' flag"))
+		c.UI.Error("Missing required '-name' flag")
 		c.UI.Error(c.Help())
 		return 1
 	}
@@ -168,11 +177,12 @@ func (c *cmd) Run(args []string) int {
 	}
 
 	newAuthMethod := &api.ACLAuthMethod{
-		Type:          c.authMethodType,
-		Name:          c.name,
-		DisplayName:   c.displayName,
-		Description:   c.description,
-		TokenLocality: c.tokenLocality,
+		Type:            c.authMethodType,
+		Name:            c.name,
+		DisplayName:     c.displayName,
+		Description:     c.description,
+		TokenLocality:   c.tokenLocality,
+		TokenNameFormat: c.tokenNameFormat,
 	}
 	if c.maxTokenTTL > 0 {
 		newAuthMethod.MaxTokenTTL = c.maxTokenTTL
@@ -185,7 +195,7 @@ func (c *cmd) Run(args []string) int {
 
 	if c.config != "" {
 		if c.k8sHost != "" || c.k8sCACert != "" || c.k8sServiceAccountJWT != "" {
-			c.UI.Error(fmt.Sprintf("Cannot use command line arguments with '-config' flags"))
+			c.UI.Error("Cannot use command line arguments with '-config' flags")
 			return 1
 		}
 		data, err := helpers.LoadDataSource(c.config, c.testStdin)
@@ -203,13 +213,13 @@ func (c *cmd) Run(args []string) int {
 
 	if c.authMethodType == "kubernetes" {
 		if c.k8sHost == "" {
-			c.UI.Error(fmt.Sprintf("Missing required '-kubernetes-host' flag"))
+			c.UI.Error("Missing required '-kubernetes-host' flag")
 			return 1
 		} else if c.k8sCACert == "" {
-			c.UI.Error(fmt.Sprintf("Missing required '-kubernetes-ca-cert' flag"))
+			c.UI.Error("Missing required '-kubernetes-ca-cert' flag")
 			return 1
 		} else if c.k8sServiceAccountJWT == "" {
-			c.UI.Error(fmt.Sprintf("Missing required '-kubernetes-service-account-jwt' flag"))
+			c.UI.Error("Missing required '-kubernetes-service-account-jwt' flag")
 			return 1
 		}
 
@@ -218,7 +228,7 @@ func (c *cmd) Run(args []string) int {
 			c.UI.Error(fmt.Sprintf("Invalid '-kubernetes-ca-cert' value: %v", err))
 			return 1
 		} else if c.k8sCACert == "" {
-			c.UI.Error(fmt.Sprintf("Kubernetes CA Cert is empty"))
+			c.UI.Error("Kubernetes CA Cert is empty")
 			return 1
 		}
 

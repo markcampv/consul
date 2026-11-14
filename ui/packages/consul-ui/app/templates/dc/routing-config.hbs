@@ -4,7 +4,7 @@
 }}
 
 <Route
-  @name={{routeName}}
+  @name={{this.routeName}}
 as |route|>
 
   <DataLoader @src={{
@@ -15,41 +15,35 @@ as |route|>
         dc=route.params.dc
         name=route.params.name
       )
-    }}
-  as |loader|>
+    }}>
 
-    <BlockSlot @name="error">
+    <:error as |loader|>
       <AppError
         @error={{loader.error}}
         @login={{route.model.app.login.open}}
       />
-    </BlockSlot>
+    </:error>
 
-    <BlockSlot @name="loaded">
+    <:loaded as |loader|>
 {{#let
   loader.data
 as |item|}}
 <AppView>
-  <BlockSlot @name="breadcrumbs">
-    <ol>
-        <li><a data-test-back href={{href-to 'dc.services'}}>All Services</a></li>
-    </ol>
-  </BlockSlot>
-  <BlockSlot @name="header">
+  <:header>
     <h1>
       <route.Title @title={{item.Chain.ServiceName}} />
     </h1>
     <Consul::Source @source={{t "routes.dc.routing-config.source"}} @withInfo={{true}} />
-  </BlockSlot>
-  <BlockSlot @name="content">
+  </:header>
+  <:content>
     <div class="container">
       <Consul::DiscoveryChain
         @chain={{item.Chain}}
       />
     </div>
-  </BlockSlot>
+  </:content>
 </AppView>
 {{/let}}
-    </BlockSlot>
+    </:loaded>
   </DataLoader>
 </Route>

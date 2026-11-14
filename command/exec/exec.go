@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package exec
@@ -158,7 +158,7 @@ func (c *cmd) Run(args []string) int {
 	}
 	defer c.destroyData()
 	if c.conf.verbose {
-		c.UI.Info(fmt.Sprintf("Uploaded remote execution spec"))
+		c.UI.Info("Uploaded remote execution spec")
 	}
 
 	// Wait for replication. This is done so that when the event is
@@ -693,7 +693,7 @@ func (u *TargetedUI) prefixLines(arrow bool, message string) string {
 	var result bytes.Buffer
 
 	for _, line := range strings.Split(message, "\n") {
-		result.WriteString(fmt.Sprintf("%s %s: %s\n", arrowText, u.Target, line))
+		fmt.Fprintf(&result, "%s %s: %s\n", arrowText, u.Target, line)
 	}
 
 	return strings.TrimRightFunc(result.String(), unicode.IsSpace)

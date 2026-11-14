@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package consul
@@ -309,7 +309,7 @@ func TestDiscoveryChainEndpoint_Get_BlockOnNoChange(t *testing.T) {
 					EvaluateInPartition:  "default",
 					Datacenter:           "dc1",
 				}
-				args.QueryOptions.MinQueryIndex = minQueryIndex
+				args.MinQueryIndex = minQueryIndex
 
 				var out structs.DiscoveryChainResponse
 				errCh := channelCallRPC(s1, "DiscoveryChain.Get", &args, &out, nil)

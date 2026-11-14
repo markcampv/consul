@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package awslambda
@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 
-	arn_sdk "github.com/aws/aws-sdk-go/aws/arn"
+	arn_sdk "github.com/aws/aws-sdk-go-v2/aws/arn"
 	envoy_cluster_v3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	envoy_core_v3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	envoy_endpoint_v3 "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
@@ -17,9 +17,10 @@ import (
 	envoy_http_v3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	envoy_tls_v3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	envoy_resource_v3 "github.com/envoyproxy/go-control-plane/pkg/resource/v3"
-	"github.com/mitchellh/mapstructure"
+	"github.com/go-viper/mapstructure/v2"
 	pstruct "google.golang.org/protobuf/types/known/structpb"
 
+	"github.com/hashicorp/consul/agent/netutil"
 	"github.com/hashicorp/consul/api"
 	"github.com/hashicorp/consul/envoyextensions/extensioncommon"
 	"github.com/hashicorp/go-multierror"
@@ -125,12 +126,16 @@ func (a *awsLambda) PatchCluster(p extensioncommon.ClusterPayload) (*envoy_clust
 	if err != nil {
 		return c, false, err
 	}
-
+	dlf := envoy_cluster_v3.Cluster_V4_ONLY
+	ds, _ := netutil.IsDualStack(nil, true)
+	if ds {
+		dlf = envoy_cluster_v3.Cluster_ALL
+	}
 	cluster := &envoy_cluster_v3.Cluster{
 		Name:                 c.Name,
 		ConnectTimeout:       c.ConnectTimeout,
 		ClusterDiscoveryType: &envoy_cluster_v3.Cluster_Type{Type: envoy_cluster_v3.Cluster_LOGICAL_DNS},
-		DnsLookupFamily:      envoy_cluster_v3.Cluster_V4_ONLY,
+		DnsLookupFamily:      dlf,
 		LbPolicy:             envoy_cluster_v3.Cluster_ROUND_ROBIN,
 		Metadata: &envoy_core_v3.Metadata{
 			FilterMetadata: map[string]*pstruct.Struct{

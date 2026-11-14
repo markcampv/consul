@@ -1,0 +1,197 @@
+{{!
+  Copyright (c) HashiCorp, Inc.
+  SPDX-License-Identifier: BUSL-1.1
+}}
+
+<Route @name={{this.routeName}} as |route|>
+  <DataLoader
+    @src={{uri
+      "/${partition}/${nspace}/${dc}/peers"
+      (hash
+        partition=route.params.partition
+        nspace=route.params.nspace
+        dc=route.params.dc
+      )
+    }}
+  >
+
+    <:error as |loader|>
+      <AppError @error={{loader.error}} @login={{route.model.app.login.open}} />
+    </:error>
+
+    <:loaded as |loader|>
+      {{#let
+        (hash
+          value=(or this.sortBy "Name:asc")
+          change=(action (mut this.sortBy) value="target.selected")
+        )
+        (hash
+          state=(hash
+            value=(if this.state (split this.state ",") undefined)
+            change=(action (mut this.state) value="target.selectedItems")
+          )
+          searchproperty=(hash
+            value=(if
+              (not-eq this.searchproperty undefined)
+              (split this.searchproperty ",")
+              this.searchProperties
+            )
+            change=(action (mut this.searchproperty) value="target.selectedItems")
+            default=this.searchProperties
+          )
+        )
+        loader.data
+        as |sort filters items|
+      }}
+        <AppView>
+          <:header>
+            <h1>
+              <route.Title @title="Peers" />
+            </h1>
+          </:header>
+          <:actions>
+
+            <Hds::Button
+              @color='primary'
+              @text='Add peer connection'
+              @icon='plus'
+              @route="dc.peers.create"
+              data-test-create
+              />
+
+          </:actions>
+          <:content>
+
+            <DataWriter
+              @sink={{uri
+                "/${partition}/${dc}/${nspace}/peer/"
+                (hash
+                  partition=route.params.partition
+                  nspace=route.params.nspace
+                  dc=route.params.dc
+                )
+              }}
+              @type="peer"
+              @label="Peer"
+            >
+
+              <:removed as |after|>
+                <Consul::Peer::Notifications
+                  {{notification after=(action after)}}
+                  @type="remove"
+                />
+              </:removed>
+              <:content as |writer|>
+
+                {{#if this.item}}
+                  <Hds::Modal
+                    id="regenerate-token-modal"
+                    @onClose={{set this "item" undefined}}
+                    as |M|
+                  >
+                    <M.Header>Regenerate token</M.Header>
+                    <M.Body>
+                      <Consul::Peer::Form::Generate
+                        @item={{this.item}}
+                        @onchange={{loader.invalidate}}
+                        @regenerate={{true}}
+                        @onCancel={{set this "item" undefined}}
+                        as |form|
+                      >
+                        {{#if form.success}}
+                          <form.TokenFieldsets />
+                        {{/if}}
+                      </Consul::Peer::Form::Generate>
+                    </M.Body>
+                  </Hds::Modal>
+                {{/if}}
+
+                <DataCollection
+                  @type="peer"
+                  @sort={{sort.value}}
+                  @filters={{filters}}
+                  @search={{this.search}}
+                  @items={{items}}
+                  as |collection|
+                >
+                  <collection.Collection>
+
+                    <Consul::Peer::List
+                      @items={{collection.items}}
+                      @onedit={{set this "item"}}
+                      @ondelete={{writer.delete}}
+                      @sort={{sort}}
+                    >
+                      <:toolbar>
+                        {{! Now nested inside collection.Collection (rendered
+                            only while there's at least one matching row), same
+                            as Consul::Partition::List::Table's :toolbar block —
+                            no separate items.length guard needed here. }}
+                        <Consul::Peer::Toolbar
+                          @search={{this.search}}
+                          @onsearch={{action (mut this.search) value="target.value"}}
+                          @sort={{sort}}
+                          @filter={{filters}}
+                        />
+                      </:toolbar>
+                    </Consul::Peer::List>
+
+                  </collection.Collection>
+                  <collection.Empty>
+                    {{! TODO: do we need to check permissions here or will we receive an error automatically? }}
+                    <EmptyState @login={{route.model.app.login.open}}>
+                      <:header>
+                        <h2>
+                          {{t
+                            "routes.dc.peers.index.empty.header"
+                            items=items.length
+                          }}
+                        </h2>
+                      </:header>
+                      <:body>
+                        <p>
+                          {{t
+                            "routes.dc.peers.index.empty.body"
+                            items=items.length
+                            canUsePartitions=(can "use partitions")
+                            canUseACLs=(can "use acls")
+                            htmlSafe=true
+                          }}
+                        </p>
+                      </:body>
+                      <:actions>
+                        <li>
+                          {{! what's the docs for peering?}}
+                          <Hds::Link::Standalone
+                            @text='Documentation on Peers'
+                            @href="{{env
+                              'CONSUL_DOCS_URL'
+                            }}/connect/cluster-peering"
+                            @icon='docs-link'
+                            @iconPosition='trailing'
+                            @size='small'
+                          />
+                        </li>
+                        <li>
+                          <Hds::Link::Standalone
+                            @text='Take the tutorial'
+                            @href="{{env
+                              'CONSUL_DOCS_URL'
+                            }}/connect/cluster-peering/create-manage-peering"
+                            @icon='learn-link'
+                            @iconPosition='trailing'
+                            @size='small'
+                          />
+                        </li>
+                      </:actions>
+                    </EmptyState>
+                  </collection.Empty>
+                </DataCollection>
+              </:content>
+            </DataWriter>
+          </:content>
+        </AppView>
+      {{/let}}
+    </:loaded>
+  </DataLoader>
+</Route>

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package proxycfgglue
@@ -166,7 +166,7 @@ func TestServerInternalServiceDump(t *testing.T) {
 
 func newMockInternalServiceDump(t *testing.T) *mockInternalServiceDump {
 	mock := &mockInternalServiceDump{}
-	mock.Mock.Test(t)
+	mock.Test(t)
 
 	t.Cleanup(func() { mock.AssertExpectations(t) })
 

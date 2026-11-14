@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package oidcauth
@@ -56,7 +56,20 @@ func TestConfigValidate(t *testing.T) {
 			},
 			expectErr: "must be set for type",
 		},
-		"missing required OIDCClientSecret": {
+		"missing required OIDCClientAssertion.PrivateKey": {
+			config: Config{
+				Type:                TypeOIDC,
+				OIDCDiscoveryURL:    srv.Addr(),
+				OIDCDiscoveryCACert: srv.CACert(),
+				OIDCClientID:        "abc",
+				OIDCClientAssertion: &OIDCClientAssertion{
+					Audience: []string{srv.Addr()},
+				},
+				AllowedRedirectURIs: []string{"http://foo.test"},
+			},
+			expectErr: "OIDCClientAssertion.PrivateKey' must be set when 'OIDCClientAssertion' is set for type",
+		},
+		"missing required OIDCClientSecret or OIDCClientAssertion": {
 			config: Config{
 				Type:                TypeOIDC,
 				OIDCDiscoveryURL:    srv.Addr(),
@@ -65,7 +78,7 @@ func TestConfigValidate(t *testing.T) {
 				// OIDCClientSecret:    "def",
 				AllowedRedirectURIs: []string{"http://foo.test"},
 			},
-			expectErr: "must be set for type",
+			expectErr: "OIDCClientSecret' or 'OIDCClientAssertion' must be set for type",
 		},
 		"missing required AllowedRedirectURIs": {
 			config: Config{
@@ -77,6 +90,36 @@ func TestConfigValidate(t *testing.T) {
 				AllowedRedirectURIs: []string{},
 			},
 			expectErr: "must be set for type",
+		},
+		"incompatible with OIDCClientSecret and OIDCClientAssertion": {
+			config: Config{
+				Type:                TypeOIDC,
+				OIDCDiscoveryURL:    srv.Addr(),
+				OIDCDiscoveryCACert: srv.CACert(),
+				OIDCClientID:        "abc",
+				OIDCClientSecret:    "def",
+				OIDCClientAssertion: &OIDCClientAssertion{
+					PrivateKey: &OIDCClientAssertionKey{PemKey: testRSAPrivateKey},
+					Audience:   []string{srv.Addr()},
+				},
+				AllowedRedirectURIs: []string{"http://foo.test"},
+			},
+			expectErr: "only one of 'OIDCClientSecret' or 'OIDCClientAssertion",
+		},
+		"incompatible key algorithm": {
+			config: Config{
+				Type:                TypeOIDC,
+				OIDCDiscoveryURL:    srv.Addr(),
+				OIDCDiscoveryCACert: srv.CACert(),
+				OIDCClientID:        "abc",
+				OIDCClientAssertion: &OIDCClientAssertion{
+					PrivateKey:   &OIDCClientAssertionKey{PemKey: testRSAPrivateKey},
+					Audience:     []string{srv.Addr()},
+					KeyAlgorithm: "foo",
+				},
+				AllowedRedirectURIs: []string{"http://foo.test"},
+			},
+			expectErr: "OIDCClientAssertion.KeyAlgorithm' must be 'RS256' currently",
 		},
 		"incompatible with JWKSURL": {
 			config: Config{
@@ -324,6 +367,102 @@ func TestConfigValidate(t *testing.T) {
 			},
 			expectErr: "ListClaimMappings contains multiple mappings for key",
 		},
+		"post-logout redirect URI: valid https": {
+			config: Config{
+				Type:                       TypeOIDC,
+				OIDCDiscoveryURL:           srv.Addr(),
+				OIDCDiscoveryCACert:        srv.CACert(),
+				OIDCClientID:               "abc",
+				OIDCClientSecret:           "def",
+				AllowedRedirectURIs:        []string{"http://foo.test"},
+				OIDCPostLogoutRedirectURIs: []string{"https://app.example.com/signed-out"},
+			},
+			expectAuthType: authOIDCFlow,
+		},
+		"post-logout redirect URI: rejects http (non-https)": {
+			config: Config{
+				Type:                       TypeOIDC,
+				OIDCDiscoveryURL:           srv.Addr(),
+				OIDCDiscoveryCACert:        srv.CACert(),
+				OIDCClientID:               "abc",
+				OIDCClientSecret:           "def",
+				AllowedRedirectURIs:        []string{"http://foo.test"},
+				OIDCPostLogoutRedirectURIs: []string{"http://app.example.com/signed-out"},
+			},
+			expectErr: "must use https",
+		},
+		"post-logout redirect URI: rejects invalid URL": {
+			config: Config{
+				Type:                       TypeOIDC,
+				OIDCDiscoveryURL:           srv.Addr(),
+				OIDCDiscoveryCACert:        srv.CACert(),
+				OIDCClientID:               "abc",
+				OIDCClientSecret:           "def",
+				AllowedRedirectURIs:        []string{"http://foo.test"},
+				OIDCPostLogoutRedirectURIs: []string{"%%%%"},
+			},
+			expectErr: "is not a valid URL",
+		},
+		"post-logout redirect URI: rejects missing host": {
+			config: Config{
+				Type:                       TypeOIDC,
+				OIDCDiscoveryURL:           srv.Addr(),
+				OIDCDiscoveryCACert:        srv.CACert(),
+				OIDCClientID:               "abc",
+				OIDCClientSecret:           "def",
+				AllowedRedirectURIs:        []string{"http://foo.test"},
+				OIDCPostLogoutRedirectURIs: []string{"https:///signed-out"},
+			},
+			expectErr: "'OIDCPostLogoutRedirectURIs[0]' must include a host",
+		},
+		"logout URL: valid https": {
+			config: Config{
+				Type:                TypeOIDC,
+				OIDCDiscoveryURL:    srv.Addr(),
+				OIDCDiscoveryCACert: srv.CACert(),
+				OIDCClientID:        "abc",
+				OIDCClientSecret:    "def",
+				AllowedRedirectURIs: []string{"http://foo.test"},
+				OIDCLogoutURL:       "https://idp.example.com/api/oidc/logout",
+			},
+			expectAuthType: authOIDCFlow,
+		},
+		"logout URL: rejects http (non-https)": {
+			config: Config{
+				Type:                TypeOIDC,
+				OIDCDiscoveryURL:    srv.Addr(),
+				OIDCDiscoveryCACert: srv.CACert(),
+				OIDCClientID:        "abc",
+				OIDCClientSecret:    "def",
+				AllowedRedirectURIs: []string{"http://foo.test"},
+				OIDCLogoutURL:       "http://idp.example.com/api/oidc/logout",
+			},
+			expectErr: "'OIDCLogoutURL' must use https",
+		},
+		"logout URL: rejects missing host": {
+			config: Config{
+				Type:                TypeOIDC,
+				OIDCDiscoveryURL:    srv.Addr(),
+				OIDCDiscoveryCACert: srv.CACert(),
+				OIDCClientID:        "abc",
+				OIDCClientSecret:    "def",
+				AllowedRedirectURIs: []string{"http://foo.test"},
+				OIDCLogoutURL:       "https:///api/oidc/logout",
+			},
+			expectErr: "'OIDCLogoutURL' must include a host",
+		},
+		"logout URL: rejects invalid URL": {
+			config: Config{
+				Type:                TypeOIDC,
+				OIDCDiscoveryURL:    srv.Addr(),
+				OIDCDiscoveryCACert: srv.CACert(),
+				OIDCClientID:        "abc",
+				OIDCClientSecret:    "def",
+				AllowedRedirectURIs: []string{"http://foo.test"},
+				OIDCLogoutURL:       "%%%%",
+			},
+			expectErr: "'OIDCLogoutURL' is not a valid URL",
+		},
 	}
 
 	jwtCases := map[string]testcase{
@@ -366,6 +505,16 @@ func TestConfigValidate(t *testing.T) {
 			},
 			expectErr: "must not be set for type",
 		},
+		"incompatible with OIDCClientAssertion": {
+			config: Config{
+				Type:                 TypeJWT,
+				JWTValidationPubKeys: []string{testJWTPubKey},
+				OIDCClientAssertion: &OIDCClientAssertion{
+					Audience: []string{srv.Addr()},
+				},
+			},
+			expectErr: "must not be set for type",
+		},
 		"incompatible with OIDCScopes": {
 			config: Config{
 				Type:                 TypeJWT,
@@ -397,6 +546,22 @@ func TestConfigValidate(t *testing.T) {
 				VerboseOIDCLogging:   true,
 			},
 			expectErr: "must not be set for type",
+		},
+		"incompatible with OIDCPostLogoutRedirectURIs": {
+			config: Config{
+				Type:                       TypeJWT,
+				JWTValidationPubKeys:       []string{testJWTPubKey},
+				OIDCPostLogoutRedirectURIs: []string{"https://example.com/out"},
+			},
+			expectErr: "must not be set for type",
+		},
+		"incompatible with OIDCLogoutURL": {
+			config: Config{
+				Type:                 TypeJWT,
+				JWTValidationPubKeys: []string{testJWTPubKey},
+				OIDCLogoutURL:        "https://idp.example.com/api/oidc/logout",
+			},
+			expectErr: "'OIDCLogoutURL' must not be set for type",
 		},
 		"too many methods (discovery + jwks)": {
 			config: Config{

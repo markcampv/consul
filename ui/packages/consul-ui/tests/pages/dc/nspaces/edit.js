@@ -1,7 +1,9 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
+
+import { clickable } from 'ember-cli-page-object';
 
 export default function (
   visitable,
@@ -16,6 +18,10 @@ export default function (
     ...submitable({}, 'main form > div'),
     ...cancelable({}, 'main form > div'),
     ...deletable({}, 'main form > div'),
+    confirmDelete: clickable("[data-test-id='confirm-action']", {
+      resetScope: true,
+      testContainer: 'body',
+    }),
     policies: policySelector(),
     roles: roleSelector(),
   };

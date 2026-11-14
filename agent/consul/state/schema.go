@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package state
@@ -25,6 +25,8 @@ func newDBSchema() *memdb.DBSchema {
 		configTableSchema,
 		coordinatesTableSchema,
 		federationStateTableSchema,
+		featureGatePolicyTableSchema,
+		featureGateStatusTableSchema,
 		freeVirtualIPTableSchema,
 		gatewayServicesTableSchema,
 		indexTableSchema,
@@ -48,6 +50,7 @@ func newDBSchema() *memdb.DBSchema {
 		tokensTableSchema,
 		tombstonesTableSchema,
 		usageTableSchema,
+		censusTableSchema,
 	)
 	withEnterpriseSchema(db)
 	return db

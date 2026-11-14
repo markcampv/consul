@@ -1,10 +1,11 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package structs
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -26,6 +27,75 @@ func TestTCPRoute(t *testing.T) {
 				}},
 			},
 			validateErr: "tcp-route currently only supports one service",
+		},
+		"service limits invalid": {
+			entry: &TCPRouteConfigEntry{
+				Kind: TCPRoute,
+				Name: "route-limits",
+				Services: []TCPService{{
+					Name: "foo",
+					Limits: &UpstreamLimits{
+						MaxConnections: intPointer(-1),
+					},
+				}},
+			},
+			validateErr: "Service[0], max connections cannot be negative",
+		},
+		"service pending request limits invalid": {
+			entry: &TCPRouteConfigEntry{
+				Kind: TCPRoute,
+				Name: "route-limits-pending",
+				Services: []TCPService{{
+					Name: "foo",
+					Limits: &UpstreamLimits{
+						MaxPendingRequests: intPointer(-1),
+					},
+				}},
+			},
+			validateErr: "Service[0], max pending requests cannot be negative",
+		},
+		"service concurrent request limits invalid": {
+			entry: &TCPRouteConfigEntry{
+				Kind: TCPRoute,
+				Name: "route-limits-concurrent",
+				Services: []TCPService{{
+					Name: "foo",
+					Limits: &UpstreamLimits{
+						MaxConcurrentRequests: intPointer(-1),
+					},
+				}},
+			},
+			validateErr: "Service[0], max concurrent requests cannot be negative",
+		},
+		"service limits passive health check invalid interval": {
+			entry: &TCPRouteConfigEntry{
+				Kind: TCPRoute,
+				Name: "route-phc-interval",
+				Services: []TCPService{{
+					Name: "foo",
+					Limits: &UpstreamLimits{
+						PassiveHealthCheck: &PassiveHealthCheck{
+							Interval: -1 * time.Second,
+						},
+					},
+				}},
+			},
+			validateErr: "cannot be negative",
+		},
+		"service limits passive health check invalid max ejection percent": {
+			entry: &TCPRouteConfigEntry{
+				Kind: TCPRoute,
+				Name: "route-phc-pct",
+				Services: []TCPService{{
+					Name: "foo",
+					Limits: &UpstreamLimits{
+						PassiveHealthCheck: &PassiveHealthCheck{
+							MaxEjectionPercent: uintPointer(101),
+						},
+					},
+				}},
+			},
+			validateErr: "must be a percentage",
 		},
 		"normalize parent kind": {
 			entry: &TCPRouteConfigEntry{
@@ -60,6 +130,31 @@ func TestTCPRoute(t *testing.T) {
 				}},
 			},
 			validateErr: "unsupported parent kind",
+		},
+		"tcp service sds missing cert resource": {
+			entry: &TCPRouteConfigEntry{
+				Kind: TCPRoute,
+				Name: "route-sds-one",
+				Services: []TCPService{{
+					Name: "foo",
+					TLS: &GatewayServiceTLSConfig{
+						SDS: &GatewayTLSSDSConfig{ClusterName: "sds-cluster"},
+					},
+				}},
+			},
+			validateErr: "TLS.SDS.CertResource is required",
+		},
+		"tcp service valid sds": {
+			entry: &TCPRouteConfigEntry{
+				Kind: TCPRoute,
+				Name: "route-sds-two",
+				Services: []TCPService{{
+					Name: "foo",
+					TLS: &GatewayServiceTLSConfig{
+						SDS: &GatewayTLSSDSConfig{CertResource: "tcp-cert"},
+					},
+				}},
+			},
 		},
 		"duplicate parents with no listener specified": {
 			entry: &TCPRouteConfigEntry{
@@ -141,6 +236,82 @@ func TestHTTPRoute(t *testing.T) {
 	t.Parallel()
 
 	cases := map[string]configEntryTestcase{
+		"service limits invalid": {
+			entry: &HTTPRouteConfigEntry{
+				Kind: HTTPRoute,
+				Name: "route-limits",
+				Parents: []ResourceReference{{
+					Name: "gateway",
+				}},
+				Rules: []HTTPRouteRule{{
+					Services: []HTTPService{{
+						Name: "svc",
+						Limits: &UpstreamLimits{
+							MaxPendingRequests: intPointer(-1),
+						},
+					}},
+				}},
+			},
+			validateErr: "Rule[0], Service[0], max pending requests cannot be negative",
+		},
+		"service concurrent limits invalid": {
+			entry: &HTTPRouteConfigEntry{
+				Kind: HTTPRoute,
+				Name: "route-limits-concurrent",
+				Parents: []ResourceReference{{
+					Name: "gateway",
+				}},
+				Rules: []HTTPRouteRule{{
+					Services: []HTTPService{{
+						Name: "svc",
+						Limits: &UpstreamLimits{
+							MaxConcurrentRequests: intPointer(-1),
+						},
+					}},
+				}},
+			},
+			validateErr: "Rule[0], Service[0], max concurrent requests cannot be negative",
+		},
+		"service limits passive health check invalid interval": {
+			entry: &HTTPRouteConfigEntry{
+				Kind: HTTPRoute,
+				Name: "route-phc-interval",
+				Parents: []ResourceReference{{
+					Name: "gateway",
+				}},
+				Rules: []HTTPRouteRule{{
+					Services: []HTTPService{{
+						Name: "svc",
+						Limits: &UpstreamLimits{
+							PassiveHealthCheck: &PassiveHealthCheck{
+								Interval: -1 * time.Second,
+							},
+						},
+					}},
+				}},
+			},
+			validateErr: "cannot be negative",
+		},
+		"service limits passive health check invalid max ejection percent": {
+			entry: &HTTPRouteConfigEntry{
+				Kind: HTTPRoute,
+				Name: "route-phc-pct",
+				Parents: []ResourceReference{{
+					Name: "gateway",
+				}},
+				Rules: []HTTPRouteRule{{
+					Services: []HTTPService{{
+						Name: "svc",
+						Limits: &UpstreamLimits{
+							PassiveHealthCheck: &PassiveHealthCheck{
+								MaxEjectionPercent: uintPointer(101),
+							},
+						},
+					}},
+				}},
+			},
+			validateErr: "must be a percentage",
+		},
 		"normalize parent kind": {
 			entry: &HTTPRouteConfigEntry{
 				Kind: HTTPRoute,
@@ -205,6 +376,63 @@ func TestHTTPRoute(t *testing.T) {
 			},
 			validateErr: "host \"...not legal\" must be a valid DNS hostname",
 		},
+		"http service sds requires hostnames": {
+			entry: &HTTPRouteConfigEntry{
+				Kind: HTTPRoute,
+				Name: "route-sds-one",
+				Parents: []ResourceReference{{
+					Name: "gateway",
+				}},
+				Rules: []HTTPRouteRule{{
+					Services: []HTTPService{{
+						Name: "svc",
+						TLS: &GatewayServiceTLSConfig{
+							SDS: &GatewayTLSSDSConfig{CertResource: "svc-cert"},
+						},
+					}},
+				}},
+			},
+			validateErr: "service TLS.SDS requires route hostnames to be set",
+		},
+		"http route can mix sds and non-sds services": {
+			entry: &HTTPRouteConfigEntry{
+				Kind: HTTPRoute,
+				Name: "route-sds-two",
+				Parents: []ResourceReference{{
+					Name: "gateway",
+				}},
+				Hostnames: []string{"api.example.com"},
+				Rules: []HTTPRouteRule{{
+					Services: []HTTPService{
+						{
+							Name: "svc-a",
+							TLS: &GatewayServiceTLSConfig{
+								SDS: &GatewayTLSSDSConfig{CertResource: "svc-a-cert"},
+							},
+						},
+						{Name: "svc-b"},
+					},
+				}},
+			},
+		},
+		"http service valid sds": {
+			entry: &HTTPRouteConfigEntry{
+				Kind: HTTPRoute,
+				Name: "route-sds-three",
+				Parents: []ResourceReference{{
+					Name: "gateway",
+				}},
+				Hostnames: []string{"api.example.com"},
+				Rules: []HTTPRouteRule{{
+					Services: []HTTPService{{
+						Name: "svc",
+						TLS: &GatewayServiceTLSConfig{
+							SDS: &GatewayTLSSDSConfig{CertResource: "svc-cert"},
+						},
+					}},
+				}},
+			},
+		},
 		"rule matches invalid header match type": {
 			entry: &HTTPRouteConfigEntry{
 				Kind: HTTPRoute,
@@ -222,6 +450,27 @@ func TestHTTPRoute(t *testing.T) {
 				}},
 			},
 			validateErr: "Rule[0], Match[0], Headers[0], match type should be one of present, exact, prefix, suffix, or regex",
+		},
+		"rule matches header with invert true is valid": {
+			entry: &HTTPRouteConfigEntry{
+				Kind: HTTPRoute,
+				Name: "route-invert",
+				Parents: []ResourceReference{{
+					Name: "gateway",
+				}},
+				Rules: []HTTPRouteRule{{
+					Matches: []HTTPMatch{{
+						Headers: []HTTPHeaderMatch{
+							{Match: HTTPHeaderMatchPresent, Name: "X-Canary", Invert: true},
+							{Match: HTTPHeaderMatchExact, Name: "X-Version", Value: "v2", Invert: true},
+							{Match: HTTPHeaderMatchPrefix, Name: "X-Env", Value: "prod", Invert: true},
+							{Match: HTTPHeaderMatchSuffix, Name: "X-Env", Value: "-beta", Invert: true},
+							{Match: HTTPHeaderMatchRegularExpression, Name: "X-Id", Value: "^test-.*", Invert: true},
+						},
+					}},
+					Services: []HTTPService{{Name: "backend"}},
+				}},
+			},
 		},
 		"rule matches invalid header match name": {
 			entry: &HTTPRouteConfigEntry{
@@ -338,7 +587,7 @@ func TestHTTPRoute(t *testing.T) {
 				}},
 			},
 		},
-		"rule normalizes service weight": {
+		"rule preserves zero service weight and normalizes negative service weight": {
 			entry: &HTTPRouteConfigEntry{
 				Kind: HTTPRoute,
 				Name: "route-one",
@@ -357,8 +606,31 @@ func TestHTTPRoute(t *testing.T) {
 			},
 			check: func(t *testing.T, entry ConfigEntry) {
 				route := entry.(*HTTPRouteConfigEntry)
-				require.Equal(t, 1, route.Rules[0].Services[0].Weight)
+				require.Equal(t, 0, route.Rules[0].Services[0].Weight)
 				require.Equal(t, 1, route.Rules[0].Services[1].Weight)
+			},
+		},
+		"rule preserves all-zero service weights as disabled": {
+			entry: &HTTPRouteConfigEntry{
+				Kind: HTTPRoute,
+				Name: "route-one",
+				Rules: []HTTPRouteRule{{
+					Services: []HTTPService{
+						{
+							Name:   "test",
+							Weight: 0,
+						},
+						{
+							Name:   "test2",
+							Weight: 0,
+						},
+					},
+				}},
+			},
+			check: func(t *testing.T, entry ConfigEntry) {
+				route := entry.(*HTTPRouteConfigEntry)
+				require.Equal(t, 0, route.Rules[0].Services[0].Weight)
+				require.Equal(t, 0, route.Rules[0].Services[1].Weight)
 			},
 		},
 
@@ -832,6 +1104,68 @@ func TestHTTPMatch_DeepEqual(t *testing.T) {
 				},
 			},
 			want: false,
+		},
+		"differing header invert — one inverted one not": {
+			match: HTTPMatch{
+				Headers: []HTTPHeaderMatch{
+					{
+						Match:  HTTPHeaderMatchExact,
+						Name:   "h1",
+						Value:  "a",
+						Invert: true,
+					},
+				},
+				Method: HTTPMatchMethodGet,
+				Path: HTTPPathMatch{
+					Match: HTTPPathMatchType(HTTPHeaderMatchPrefix),
+					Value: "/bender",
+				},
+			},
+			other: HTTPMatch{
+				Headers: []HTTPHeaderMatch{
+					{
+						Match:  HTTPHeaderMatchExact,
+						Name:   "h1",
+						Value:  "a",
+						Invert: false,
+					},
+				},
+				Method: HTTPMatchMethodGet,
+				Path: HTTPPathMatch{
+					Match: HTTPPathMatchType(HTTPHeaderMatchPrefix),
+					Value: "/bender",
+				},
+			},
+			want: false,
+		},
+		"identical headers with invert true are equal": {
+			match: HTTPMatch{
+				Headers: []HTTPHeaderMatch{
+					{
+						Match:  HTTPHeaderMatchPresent,
+						Name:   "X-Canary",
+						Invert: true,
+					},
+				},
+				Path: HTTPPathMatch{
+					Match: HTTPPathMatchPrefix,
+					Value: "/",
+				},
+			},
+			other: HTTPMatch{
+				Headers: []HTTPHeaderMatch{
+					{
+						Match:  HTTPHeaderMatchPresent,
+						Name:   "X-Canary",
+						Invert: true,
+					},
+				},
+				Path: HTTPPathMatch{
+					Match: HTTPPathMatchPrefix,
+					Value: "/",
+				},
+			},
+			want: true,
 		},
 		"different query matches": {
 			match: HTTPMatch{

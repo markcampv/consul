@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package consul
@@ -456,7 +456,7 @@ func TestCoordinate_ListNodes_ACLFilter(t *testing.T) {
 	if len(resp.Coordinates) != 1 || resp.Coordinates[0].Node != "foo" {
 		t.Fatalf("bad: %#v", resp.Coordinates)
 	}
-	if !resp.QueryMeta.ResultsFilteredByACLs {
+	if !resp.ResultsFilteredByACLs {
 		t.Fatal("ResultsFilteredByACLs should be true")
 	}
 }

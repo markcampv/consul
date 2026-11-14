@@ -8,15 +8,15 @@
   ...attributes
 >
   <PopoverMenu
-    @expanded={{expanded}}
-    @onchange={{action onchange}}
-    @keyboardAccess={{false}}
-  as |components api|>
-    <BlockSlot @name="trigger">
+    @expanded={{@expanded}}
+    @onchange={{action @onchange}}
+    @keyboardAccess={{true}}
+  >
+    <:trigger>
       More
-    </BlockSlot>
-    <BlockSlot @name="menu">
+    </:trigger>
+    <:menu as |components api|>
       {{yield components.MenuItem}}
-    </BlockSlot>
+    </:menu>
   </PopoverMenu>
 </div>

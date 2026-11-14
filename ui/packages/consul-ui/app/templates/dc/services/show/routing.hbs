@@ -4,7 +4,7 @@
 }}
 
 <Route
-  @name={{routeName}}
+  @name={{this.routeName}}
 as |route|>
   <DataLoader @src={{
       uri '/${partition}/${nspace}/${dc}/discovery-chain/${name}'
@@ -14,21 +14,24 @@ as |route|>
         dc=route.params.dc
         name=route.params.name
       )
-  }} as |loader|>
+  }}>
 
-    <BlockSlot @name="error">
-      <AppError
-        @error={{loader.error}}
-        @login={{route.model.app.login.open}}
-      />
-    </BlockSlot>
+    <:error as |loader|>
+      <div class="tab-section">
+        <AppError
+          @nested={{true}}
+          @error={{loader.error}}
+          @login={{route.model.app.login.open}}
+        />
+      </div>
+    </:error>
 
-    <BlockSlot @name="loaded">
+    <:loaded as |loader|>
       <div class="tab-section">
         <Consul::DiscoveryChain
           @chain={{loader.data.Chain}}
         />
       </div>
-    </BlockSlot>
+    </:loaded>
   </DataLoader>
 </Route>

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package state
@@ -10,6 +10,7 @@ import (
 	memdb "github.com/hashicorp/go-memdb"
 
 	"github.com/hashicorp/consul/acl"
+	"github.com/hashicorp/consul/agent/consul/adapter"
 	"github.com/hashicorp/consul/agent/consul/stream"
 	"github.com/hashicorp/consul/agent/structs"
 	"github.com/hashicorp/consul/proto/private/pbcommon"
@@ -63,12 +64,23 @@ func (e EventPayloadCheckServiceNode) Subject() stream.Subject {
 }
 
 func (e EventPayloadCheckServiceNode) ToSubscriptionEvent(idx uint64) *pbsubscribe.Event {
+	value := e.Value
+	if value != nil {
+		valueCopy := *value
+		if value.Service != nil {
+			serviceCopy := *value.Service
+			valueCopy.Service = &serviceCopy
+		}
+		adapter.PopulateLegacyCheckServiceNodePorts(structs.CheckServiceNodes{valueCopy})
+		value = &valueCopy
+	}
+
 	return &pbsubscribe.Event{
 		Index: idx,
 		Payload: &pbsubscribe.Event_ServiceHealth{
 			ServiceHealth: &pbsubscribe.ServiceHealthUpdate{
 				Op:               e.Op,
-				CheckServiceNode: pbservice.NewCheckServiceNodeFromStructs(e.Value),
+				CheckServiceNode: pbservice.NewCheckServiceNodeFromStructs(value),
 			},
 		},
 	}
@@ -451,11 +463,11 @@ func ServiceHealthEventsFromChanges(tx ReadTxn, changes Changes) ([]stream.Event
 					e.Topic = EventTopicServiceHealthConnect
 					payload := e.Payload.(EventPayloadCheckServiceNode)
 					payload.overrideKey = serviceName.Name
-					if gatewayName.EnterpriseMeta.NamespaceOrDefault() != serviceName.EnterpriseMeta.NamespaceOrDefault() {
-						payload.overrideNamespace = serviceName.EnterpriseMeta.NamespaceOrDefault()
+					if gatewayName.NamespaceOrDefault() != serviceName.NamespaceOrDefault() {
+						payload.overrideNamespace = serviceName.NamespaceOrDefault()
 					}
-					if gatewayName.EnterpriseMeta.PartitionOrDefault() != serviceName.EnterpriseMeta.PartitionOrDefault() {
-						payload.overridePartition = serviceName.EnterpriseMeta.PartitionOrDefault()
+					if gatewayName.PartitionOrDefault() != serviceName.PartitionOrDefault() {
+						payload.overridePartition = serviceName.PartitionOrDefault()
 					}
 					e.Payload = payload
 
@@ -484,11 +496,11 @@ func ServiceHealthEventsFromChanges(tx ReadTxn, changes Changes) ([]stream.Event
 				e.Topic = EventTopicServiceHealthConnect
 				payload := e.Payload.(EventPayloadCheckServiceNode)
 				payload.overrideKey = serviceName.Name
-				if gatewayName.EnterpriseMeta.NamespaceOrDefault() != serviceName.EnterpriseMeta.NamespaceOrDefault() {
-					payload.overrideNamespace = serviceName.EnterpriseMeta.NamespaceOrDefault()
+				if gatewayName.NamespaceOrDefault() != serviceName.NamespaceOrDefault() {
+					payload.overrideNamespace = serviceName.NamespaceOrDefault()
 				}
-				if gatewayName.EnterpriseMeta.PartitionOrDefault() != serviceName.EnterpriseMeta.PartitionOrDefault() {
-					payload.overridePartition = serviceName.EnterpriseMeta.PartitionOrDefault()
+				if gatewayName.PartitionOrDefault() != serviceName.PartitionOrDefault() {
+					payload.overridePartition = serviceName.PartitionOrDefault()
 				}
 				e.Payload = payload
 
@@ -625,11 +637,11 @@ func copyEventForService(event stream.Event, service structs.ServiceName) stream
 	event.Topic = EventTopicServiceHealthConnect
 	payload := event.Payload.(EventPayloadCheckServiceNode)
 	payload.overrideKey = service.Name
-	if payload.Value.Service.EnterpriseMeta.NamespaceOrDefault() != service.EnterpriseMeta.NamespaceOrDefault() {
-		payload.overrideNamespace = service.EnterpriseMeta.NamespaceOrDefault()
+	if payload.Value.Service.NamespaceOrDefault() != service.NamespaceOrDefault() {
+		payload.overrideNamespace = service.NamespaceOrDefault()
 	}
-	if payload.Value.Service.EnterpriseMeta.PartitionOrDefault() != service.EnterpriseMeta.PartitionOrDefault() {
-		payload.overridePartition = service.EnterpriseMeta.PartitionOrDefault()
+	if payload.Value.Service.PartitionOrDefault() != service.PartitionOrDefault() {
+		payload.overridePartition = service.PartitionOrDefault()
 	}
 
 	event.Payload = payload
@@ -718,9 +730,7 @@ func getNodeAndChecks(tx ReadTxn, node string, entMeta *acl.EnterpriseMeta, peer
 		// Create a new slice so that append does not modify the array backing nodeChecks.
 		result := make(structs.HealthChecks, 0, len(nodeChecks))
 		result = append(result, nodeChecks...)
-		for _, check := range svcChecks[serviceID] {
-			result = append(result, check)
-		}
+		result = append(result, svcChecks[serviceID]...)
 		return result
 	}
 	return n, serviceChecks, nil

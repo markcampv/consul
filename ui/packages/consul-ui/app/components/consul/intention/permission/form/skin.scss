@@ -1,12 +1,17 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 .consul-intention-permission-form {
   h2 {
-    border-top: 1px solid var(--token-color-foreground-action);
     @extend %display-400-semibold;
+  }
+  .methods-description {
+    font-size: var(--token-typography-body-100-font-size);
+    line-height: var(--token-typography-body-100-line-height);
+    color: var(--token-color-foreground-faint);
+    margin: 0 0 8px;
   }
   button.type-submit {
     @extend %frame-blue-300;

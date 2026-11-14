@@ -1,9 +1,10 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package auth
 
 import (
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"time"
@@ -185,7 +186,7 @@ func (w *TokenWriter) Update(token *structs.ACLToken) (*structs.ACLToken, error)
 
 	if token.SecretID == "" {
 		token.SecretID = match.SecretID
-	} else if match.SecretID != token.SecretID {
+	} else if subtle.ConstantTimeCompare([]byte(match.SecretID), []byte(token.SecretID)) != 1 {
 		return nil, errors.New("Changing a token's SecretID is not permitted")
 	}
 
@@ -318,6 +319,11 @@ func (w *TokenWriter) write(token, existing *structs.ACLToken, fromLogin bool) (
 	if err := w.enterpriseValidation(token, existing); err != nil {
 		return nil, err
 	}
+
+	// IDPLogoutURL is response-only. It is never accepted from callers or
+	// written to Raft; the OIDC login handler sets it on the reply after the
+	// token has been persisted.
+	token.IDPLogoutURL = ""
 
 	token.SetHash(true)
 

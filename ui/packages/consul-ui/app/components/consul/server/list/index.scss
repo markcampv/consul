@@ -1,19 +1,21 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
-%consul-server-list ul {
+.consul-server-list ul {
   display: grid;
   grid-template-columns: repeat(4, minmax(215px, 25%));
   gap: 12px;
+  list-style: none;
+  padding: 0;
+  margin: 0;
 }
-
-.consul-server-list {
-  @extend %consul-server-list;
+.consul-server-list li {
+  display: flex;
 }
-
-%consul-server-list a:hover div {
-  box-shadow: var(--token-elevation-overlay-box-shadow);
-  --tone-border: var(--token-color-foreground-faint);
+/* so every card fills its cell and all cards in a row end up the same height */
+.consul-server-list li > * {
+  flex: 1;
+  min-width: 0;
 }

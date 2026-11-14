@@ -1,10 +1,15 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 %app-view-title {
   border-bottom: var(--decor-border-100);
+}
+/* HDS Tabs carry their own full-width divider, so the title's would double up
+   when the tabs are the first thing after it (at the start of the content). */
+.app-view:has(> header + div > .hds-tabs:first-child) > header .title:last-child {
+  border-bottom: none;
 }
 %app-view-content form:not(.filter-bar) fieldset {
   border-bottom: var(--decor-border-200);
@@ -16,7 +21,7 @@
   color: var(--token-color-hashicorp-brand);
 }
 %app-view-content div > dl > dd {
-  color: var(--token-color-foreground-disabled);
+  color: var(--token-color-foreground-faint);
 }
 %app-view-title,
 %app-view-content form:not(.filter-bar) fieldset {

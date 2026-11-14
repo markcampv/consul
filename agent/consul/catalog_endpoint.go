@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package consul
@@ -10,17 +10,19 @@ import (
 	"strings"
 	"time"
 
-	"github.com/armon/go-metrics"
-	"github.com/armon/go-metrics/prometheus"
+	hashstructure_v2 "github.com/mitchellh/hashstructure/v2"
+
 	"github.com/hashicorp/go-bexpr"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-memdb"
+	"github.com/hashicorp/go-metrics"
+	"github.com/hashicorp/go-metrics/prometheus"
 	"github.com/hashicorp/go-uuid"
-	hashstructure_v2 "github.com/mitchellh/hashstructure/v2"
 
 	"github.com/hashicorp/consul/acl"
 	"github.com/hashicorp/consul/acl/resolver"
 	"github.com/hashicorp/consul/agent/configentry"
+	"github.com/hashicorp/consul/agent/consul/adapter"
 	"github.com/hashicorp/consul/agent/consul/state"
 	"github.com/hashicorp/consul/agent/structs"
 	"github.com/hashicorp/consul/ipaddr"
@@ -166,11 +168,52 @@ func (c *Catalog) Register(args *structs.RegisterRequest, reply *struct{}) error
 		}
 	}
 
+	// Hold the node's write lock from the ownership lookups below until the
+	// Raft apply completes, so a concurrent write to the same node cannot
+	// change an existing check or service between authorization and apply.
+	unlock := c.srv.nodeWriteLocks.lock(registerNodeWriteLockIndexes(args, entMeta.PartitionOrDefault()))
+	defer unlock()
+
 	// Check the complete register request against the given ACL policy.
 	_, ns, err := state.NodeServices(nil, args.Node, entMeta, args.PeerName)
 	if err != nil {
 		return fmt.Errorf("Node lookup failed: %v", err)
 	}
+
+	// If the request carries a Node.ID, check whether that ID already belongs
+	// to a different node. ensureNodeTxn resolves by ID first and will cascade-
+	// delete the existing node if the name differs, so we must authorize against
+	// the existing node's real name before vetRegisterWithACL checks the
+	// request's own name. This mirrors the protection in vetNodeTxnOp.
+	if args.ID != "" {
+		_, existingByID, err := state.GetNodeID(args.ID, &args.EnterpriseMeta, args.PeerName)
+		if err != nil {
+			return fmt.Errorf("node lookup by ID failed: %w", err)
+		}
+		if existingByID != nil && !strings.EqualFold(existingByID.Node, args.Node) {
+			var existingCtx acl.AuthorizerContext
+			existingByID.FillAuthzContext(&existingCtx)
+			if err := authz.ToAllowAuthorizer().NodeWriteAllowed(existingByID.Node, &existingCtx); err != nil {
+				return err
+			}
+		}
+	}
+
+	for _, check := range args.Checks {
+		if check.CheckID == "" {
+			continue
+		}
+		_, existingCheck, err := state.NodeCheck(check.Node, check.CheckID, &check.EnterpriseMeta, check.PeerName)
+		if err != nil {
+			return fmt.Errorf("check lookup failed: %w", err)
+		}
+		if existingCheck != nil {
+			if err := vetExistingCheckWithACL(authz, existingCheck, ns); err != nil {
+				return err
+			}
+		}
+	}
+
 	if err := vetRegisterWithACL(authz, args, ns); err != nil {
 		return err
 	}
@@ -194,6 +237,13 @@ func nodePreApply(nodeName, nodeID string) error {
 }
 
 func servicePreApply(service *structs.NodeService, authz resolver.Result, authzCtxFill func(*acl.AuthorizerContext)) error {
+	if err := servicePreApplyValidate(service); err != nil {
+		return err
+	}
+	return serviceACLCheck(service, authz, authzCtxFill)
+}
+
+func servicePreApplyValidate(service *structs.NodeService) error {
 	// Validate the service. This is in addition to the below since
 	// the above just hasn't been moved over yet. We should move it over
 	// in time.
@@ -205,7 +255,12 @@ func servicePreApply(service *structs.NodeService, authz resolver.Result, authzC
 		return fmt.Errorf("service name (Service.Service) is required; both Service ID (Service.ID) and Service Name cannot be empty")
 	}
 
-	// If no service id, but service name, use default
+	// Check if service name and service ID are empty.
+	if service.ID == "" && service.Service == "" {
+		return fmt.Errorf("service name (Service.Service) is required; both Service ID (Service.ID) and Service Name cannot be empty")
+	}
+
+	// If no service id, but service name, use default.
 	if service.ID == "" && service.Service != "" {
 		service.ID = service.Service
 	}
@@ -221,24 +276,50 @@ func servicePreApply(service *structs.NodeService, authz resolver.Result, authzC
 		return fmt.Errorf("Invalid service address")
 	}
 
+	return nil
+}
+
+func serviceACLCheck(service *structs.NodeService, authz resolver.Result, authzCtxFill func(*acl.AuthorizerContext)) error {
+	return serviceACLCheckWithConsulExemption(service, authz, authzCtxFill, true)
+}
+
+func serviceACLCheckNoConsulExemption(service *structs.NodeService, authz resolver.Result, authzCtxFill func(*acl.AuthorizerContext)) error {
+	return serviceACLCheckWithConsulExemption(service, authz, authzCtxFill, false)
+}
+
+func serviceACLCheckWithConsulExemption(
+	service *structs.NodeService,
+	authz resolver.Result,
+	authzCtxFill func(*acl.AuthorizerContext),
+	allowConsulExemption bool,
+) error {
 	var authzContext acl.AuthorizerContext
 	authzCtxFill(&authzContext)
 
-	// Apply the ACL policy if any. The 'consul' service is excluded
-	// since it is managed automatically internally (that behavior
-	// is going away after version 0.8). We check this same policy
-	// later if version 0.8 is enabled, so we can eventually just
-	// delete this and do all the ACL checks down there.
-	if service.Service != structs.ConsulServiceName {
+	// The historical servicePreApply path exempted the internal "consul"
+	// service from the early ServiceWriteAllowed check. That exemption must
+	// not be used for public transaction input, because txn mutations are
+	// applied by Service.ID while callers control Service.Service.
+	if !allowConsulExemption || service.Service != structs.ConsulServiceName {
 		if err := authz.ToAllowAuthorizer().ServiceWriteAllowed(service.Service, &authzContext); err != nil {
 			return err
 		}
 	}
 
-	// Proxies must have write permission on their destination
+	// Proxies must have write permission on their destination.
 	if service.Kind == structs.ServiceKindConnectProxy {
 		if err := authz.ToAllowAuthorizer().ServiceWriteAllowed(service.Proxy.DestinationServiceName, &authzContext); err != nil {
 			return err
+		}
+	}
+
+	// Escape-hatch keys in Proxy.Config or Proxy.Upstreams[*].Config embed
+	// arbitrary Envoy JSON into the sidecar's bootstrap configuration or xDS
+	// listener/cluster resources. They can introduce code-executing HTTP
+	// filters and therefore require mesh:write independently of service:write.
+	if service.Proxy.HasEnvoyEscapeHatchOverride() {
+		if err := authz.ToAllowAuthorizer().MeshWriteAllowed(&authzContext); err != nil {
+			return fmt.Errorf("mesh:write required to set an Envoy escape-hatch key in Proxy.Config or Proxy.Upstreams[*].Config: %w", err)
 		}
 	}
 
@@ -372,6 +453,25 @@ func vetRegisterWithACL(
 	return nil
 }
 
+func vetExistingCheckWithACL(authz resolver.Result, check *structs.HealthCheck, ns *structs.NodeServices) error {
+	var authzContext acl.AuthorizerContext
+	check.FillAuthzContext(&authzContext)
+
+	if check.ServiceID == "" {
+		return authz.ToAllowAuthorizer().NodeWriteAllowed(check.Node, &authzContext)
+	}
+
+	serviceName := check.ServiceName
+	if ns != nil {
+		if service, ok := ns.Services[check.ServiceID]; ok {
+			serviceName = service.Service
+			service.FillAuthzContext(&authzContext)
+		}
+	}
+
+	return authz.ToAllowAuthorizer().ServiceWriteAllowed(serviceName, &authzContext)
+}
+
 // Deregister a service or check in a node, or the entire node itself.
 //
 // If a ServiceID is provided in the request, any associated Checks
@@ -380,6 +480,10 @@ func vetRegisterWithACL(
 // If a ServiceID or CheckID is not provided in the request, the entire
 // node is deregistered.
 func (c *Catalog) Deregister(args *structs.DeregisterRequest, reply *struct{}) error {
+	if args.PeerName != structs.DefaultPeerKeyword {
+		return errors.New("deregistering peer-imported catalog objects is not supported")
+	}
+
 	if done, err := c.srv.ForwardRPC("Catalog.Deregister", args, reply); done {
 		return err
 	}
@@ -399,6 +503,11 @@ func (c *Catalog) Deregister(args *structs.DeregisterRequest, reply *struct{}) e
 	if err := c.srv.validateEnterpriseRequest(&args.EnterpriseMeta, true); err != nil {
 		return err
 	}
+
+	// Hold the node write lock from the lookups below until the Raft apply
+	// completes, so the target cannot change between authorization and apply.
+	unlock := c.srv.nodeWriteLocks.lock([]int{nodeWriteLockIndex(args.PartitionOrDefault(), args.PeerName, args.Node)})
+	defer unlock()
 
 	// Check the complete deregister request against the given ACL policy.
 	state := c.srv.fsm.State()
@@ -532,7 +641,7 @@ func (c *Catalog) ListNodes(args *structs.DCSpecificRequest, reply *structs.Inde
 				return err
 			}
 			if isUnmodified(args.QueryOptions, reply.Index) {
-				reply.QueryMeta.NotModified = true
+				reply.NotModified = true
 				reply.Nodes = nil
 				return nil
 			}
@@ -612,7 +721,7 @@ func (c *Catalog) ListServices(args *structs.DCSpecificRequest, reply *structs.I
 			}
 			if isUnmodified(args.QueryOptions, reply.Index) {
 				reply.Services = nil
-				reply.QueryMeta.NotModified = true
+				reply.NotModified = true
 				return nil
 			}
 
@@ -851,6 +960,7 @@ func (c *Catalog) ServiceNodes(args *structs.ServiceSpecificRequest, reply *stru
 				return err
 			}
 			reply.ServiceNodes = raw.(structs.ServiceNodes)
+			adapter.PopulateLegacyServiceNodePorts(reply.ServiceNodes)
 
 			return c.srv.sortNodesByDistanceFrom(args.Source, reply.ServiceNodes)
 		})
@@ -947,6 +1057,9 @@ func (c *Catalog) NodeServices(args *structs.NodeSpecificRequest, reply *structs
 					return err
 				}
 				reply.NodeServices.Services = raw.(map[string]*structs.NodeService)
+				for _, service := range reply.NodeServices.Services {
+					adapter.PopulateLegacyNodeServicePort(service)
+				}
 			}
 
 			return nil
@@ -1058,6 +1171,9 @@ func (c *Catalog) NodeServiceList(args *structs.NodeSpecificRequest, reply *stru
 				return err
 			}
 			reply.NodeServices.Services = raw.([]*structs.NodeService)
+			for _, service := range reply.NodeServices.Services {
+				adapter.PopulateLegacyNodeServicePort(service)
+			}
 
 			return nil
 		})
@@ -1150,6 +1266,15 @@ func (c *Catalog) VirtualIPForService(args *structs.ServiceSpecificRequest, repl
 
 	state := c.srv.fsm.State()
 	psn := structs.PeeredServiceName{Peer: args.PeerName, ServiceName: structs.NewServiceName(args.ServiceName, &args.EnterpriseMeta)}
+
+	vip, handled, err := virtualIPForServicePort(state, psn, args.PortName)
+	if err != nil {
+		return err
+	}
+	if handled {
+		*reply = vip
+		return nil
+	}
 	*reply, err = state.VirtualIPForService(psn)
 	return err
 }

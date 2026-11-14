@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package agent
@@ -22,19 +22,17 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/armon/go-metrics"
-	"github.com/armon/go-metrics/prometheus"
 	"github.com/rboyer/safeio"
 	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 
 	"github.com/hashicorp/go-connlimit"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-memdb"
+	"github.com/hashicorp/go-metrics"
+	"github.com/hashicorp/go-metrics/prometheus"
 	"github.com/hashicorp/go-multierror"
-	"github.com/hashicorp/hcp-scada-provider/capability"
 	"github.com/hashicorp/raft"
 	"github.com/hashicorp/serf/serf"
 
@@ -48,12 +46,13 @@ import (
 	"github.com/hashicorp/consul/agent/consul"
 	rpcRate "github.com/hashicorp/consul/agent/consul/rate"
 	"github.com/hashicorp/consul/agent/consul/servercert"
+	"github.com/hashicorp/consul/agent/featuregate"
 	external "github.com/hashicorp/consul/agent/grpc-external"
 	grpcDNS "github.com/hashicorp/consul/agent/grpc-external/services/dns"
 	middleware "github.com/hashicorp/consul/agent/grpc-middleware"
-	"github.com/hashicorp/consul/agent/hcp/scada"
 	"github.com/hashicorp/consul/agent/leafcert"
 	"github.com/hashicorp/consul/agent/local"
+	"github.com/hashicorp/consul/agent/netutil"
 	"github.com/hashicorp/consul/agent/proxycfg"
 	proxycfgglue "github.com/hashicorp/consul/agent/proxycfg-glue"
 	catalogproxycfg "github.com/hashicorp/consul/agent/proxycfg-sources/catalog"
@@ -406,6 +405,10 @@ type Agent struct {
 	// IP.
 	httpConnLimiter connlimit.Limiter
 
+	// grpcConnLimiter is used to limit connections to the external gRPC server
+	// (the "grpc" and "grpc_tls" ports) by client IP.
+	grpcConnLimiter connlimit.Limiter
+
 	// configReloaders are subcomponents that need to be notified on a reload so
 	// they can update their internal state.
 	configReloaders []ConfigReloader
@@ -430,10 +433,6 @@ type Agent struct {
 
 	// xdsServer serves the XDS protocol for configuring Envoy proxies.
 	xdsServer *xds.Server
-
-	// scadaProvider is set when HashiCorp Cloud Platform integration is configured and exposes the agent's API over
-	// an encrypted session to HCP
-	scadaProvider scada.Provider
 
 	// enterpriseAgent embeds fields that we only access in consul-enterprise builds
 	enterpriseAgent
@@ -491,7 +490,6 @@ func New(bd BaseDeps) (*Agent, error) {
 		cache:           bd.Cache,
 		leafCertManager: bd.LeafCertManager,
 		routineManager:  routine.NewManager(bd.Logger),
-		scadaProvider:   bd.HCP.Provider,
 	}
 
 	// TODO: create rpcClientHealth in BaseDeps once NetRPC is available without Agent
@@ -790,6 +788,19 @@ func (a *Agent) Start(ctx context.Context) error {
 		return fmt.Errorf("unexpected ACL default policy value of %q", a.config.ACLResolverSettings.ACLDefaultPolicy)
 	}
 
+	var featureGateStore featuregate.WatchableGate
+	if consulServer != nil {
+		featureGateStore = consulServer.FeatureGateStore()
+	} else {
+		clientStore := &featuregate.Store{}
+		featureGateStore = clientStore
+		index, err := a.refreshClientFeatureGates(clientStore, 0, false)
+		if err != nil {
+			a.logger.Warn("failed to fetch initial client feature gates", "error", err)
+		}
+		go a.runClientFeatureGateCache(clientStore, index)
+	}
+
 	// If DefaultIntentionPolicy is defined, it should override
 	// the values inherited from ACLDefaultPolicy.
 	switch a.config.DefaultIntentionPolicy {
@@ -819,6 +830,7 @@ func (a *Agent) Start(ctx context.Context) error {
 		TLSConfigurator:       a.tlsConfigurator,
 		IntentionDefaultAllow: intentionDefaultAllow,
 		UpdateRateLimit:       a.config.XDSUpdateRateLimit,
+		FeatureGate:           featureGateStore,
 	})
 	if err != nil {
 		return err
@@ -864,12 +876,19 @@ func (a *Agent) Start(ctx context.Context) error {
 		MaxConnsPerClientIP: a.config.HTTPMaxConnsPerClient,
 	})
 
+	// Configure the external gRPC connection limiter.
+	a.grpcConnLimiter.SetConfig(connlimit.Config{
+		MaxConnsPerClientIP: a.config.GRPCMaxConnsPerClient,
+	})
+
 	// Create listeners and unstarted servers; see comment on listenHTTP why
 	// we are doing this.
 	servers, err := a.listenHTTP()
 	if err != nil {
 		return err
 	}
+
+	netutil.SetAgentBindAddr(a.config.BindAddr)
 
 	// Start HTTP and HTTPS servers.
 	for _, srv := range servers {
@@ -895,8 +914,22 @@ func (a *Agent) Start(ctx context.Context) error {
 		go a.retryJoinWAN()
 	}
 
-	if a.tlsConfigurator.Cert() != nil {
-		m := tlsCertExpirationMonitor(a.tlsConfigurator, a.logger)
+	shouldMonitorAgentTLS := a.config.Telemetry.CertificateEnabled &&
+		(a.tlsConfigurator.Cert() != nil ||
+			a.config.AutoEncryptTLS ||
+			a.config.TLS.InternalRPC.CertFile != "" ||
+			a.config.TLS.InternalRPC.KeyFile != "")
+	if shouldMonitorAgentTLS {
+		m := tlsCertExpirationMonitor(
+			a.tlsConfigurator,
+			a.config.Datacenter,
+			a.config.PartitionOrDefault(),
+			a.config.NodeName,
+			tlsCertRole(a.config.ServerMode),
+			a.config.Telemetry.CertificateCriticalThresholdDays,
+			a.config.Telemetry.CertificateWarningThresholdDays,
+			a.logger,
+		)
 		go m.Monitor(&lib.StopChannelContext{StopCh: a.shutdownCh})
 	}
 
@@ -985,7 +1018,13 @@ func (a *Agent) listenAndServeGRPC(server *consul.Server) error {
 			return err
 		}
 		for i := range ln {
-			ln[i] = middleware.LabelledListener{Listener: ln[i], Protocol: protocol}
+			// Enforce a per-client-IP connection limit before the connection is
+			// handed to the gRPC server. The limiter wraps the raw listener so
+			// that LabelledListener remains the outermost wrapper (its
+			// LabelledConn is required by the gRPC transport credentials for
+			// protocol detection).
+			limited := middleware.NewConnLimitListener(ln[i], &a.grpcConnLimiter, a.logger)
+			ln[i] = middleware.LabelledListener{Listener: limited, Protocol: protocol}
 			listeners = append(listeners, ln[i])
 		}
 
@@ -1106,12 +1145,6 @@ func (a *Agent) startListeners(addrs []net.Addr) ([]net.Listener, error) {
 			}
 			l = &tcpKeepAliveListener{l.(*net.TCPListener)}
 
-		case *capability.Addr:
-			l, err = a.scadaProvider.Listen(x.Capability())
-			if err != nil {
-				return nil, err
-			}
-
 		default:
 			closeAll()
 			return nil, fmt.Errorf("unsupported address type %T", addr)
@@ -1164,15 +1197,14 @@ func (a *Agent) listenHTTP() ([]apiServer, error) {
 			a.configReloaders = append(a.configReloaders, srv.ReloadConfig)
 			a.httpHandlers = srv
 			httpServer := &http.Server{
-				Addr:           l.Addr().String(),
-				TLSConfig:      tlscfg,
-				Handler:        srv.handler(),
-				MaxHeaderBytes: a.config.HTTPMaxHeaderBytes,
-			}
-
-			if scada.IsCapability(l.Addr()) {
-				// wrap in http2 server handler
-				httpServer.Handler = h2c.NewHandler(srv.handler(), &http2.Server{})
+				Addr:              l.Addr().String(),
+				TLSConfig:         tlscfg,
+				Handler:           srv.handler(),
+				MaxHeaderBytes:    a.config.HTTPMaxHeaderBytes,
+				ReadHeaderTimeout: a.config.HTTPReadHeaderTimeout,
+				ReadTimeout:       a.config.HTTPReadTimeout,
+				WriteTimeout:      a.config.HTTPWriteTimeout,
+				IdleTimeout:       a.config.HTTPIdleTimeout,
 			}
 
 			// Load the connlimit helper into the server
@@ -1192,9 +1224,6 @@ func (a *Agent) listenHTTP() ([]apiServer, error) {
 	}
 
 	httpAddrs := a.config.HTTPAddrs
-	if a.config.IsCloudEnabled() && a.scadaProvider != nil {
-		httpAddrs = append(httpAddrs, scada.CAPCoreAPI)
-	}
 
 	if err := start("http", httpAddrs); err != nil {
 		closeListeners(ln)
@@ -1397,6 +1426,11 @@ func newConsulConfig(runtimeCfg *config.RuntimeConfig, logger hclog.Logger) (*co
 	cfg.SerfLANConfig.MemberlistConfig.GossipInterval = runtimeCfg.GossipLANGossipInterval
 	cfg.SerfLANConfig.MemberlistConfig.GossipNodes = runtimeCfg.GossipLANGossipNodes
 	cfg.SerfLANConfig.MemberlistConfig.ProbeInterval = runtimeCfg.GossipLANProbeInterval
+
+	// Certificate telemetry configuration
+	cfg.CertificateTelemetryEnabled = runtimeCfg.Telemetry.CertificateEnabled
+	cfg.CertificateTelemetryCriticalThresholdDays = runtimeCfg.Telemetry.CertificateCriticalThresholdDays
+	cfg.CertificateTelemetryWarningThresholdDays = runtimeCfg.Telemetry.CertificateWarningThresholdDays
 	cfg.SerfLANConfig.MemberlistConfig.ProbeTimeout = runtimeCfg.GossipLANProbeTimeout
 	cfg.SerfLANConfig.MemberlistConfig.SuspicionMult = runtimeCfg.GossipLANSuspicionMult
 	cfg.SerfLANConfig.MemberlistConfig.RetransmitMult = runtimeCfg.GossipLANRetransmitMult
@@ -1496,6 +1530,7 @@ func newConsulConfig(runtimeCfg *config.RuntimeConfig, logger hclog.Logger) (*co
 	cfg.AutopilotConfig.RedundancyZoneTag = runtimeCfg.AutopilotRedundancyZoneTag
 	cfg.AutopilotConfig.DisableUpgradeMigration = runtimeCfg.AutopilotDisableUpgradeMigration
 	cfg.AutopilotConfig.UpgradeVersionTag = runtimeCfg.AutopilotUpgradeVersionTag
+	cfg.FeatureGatesBootstrap = runtimeCfg.FeatureGatesBootstrap
 
 	// make sure the advertise address is always set
 	if cfg.RPCAdvertise == nil {
@@ -1516,6 +1551,9 @@ func newConsulConfig(runtimeCfg *config.RuntimeConfig, logger hclog.Logger) (*co
 	}
 	if runtimeCfg.RPCMaxConnsPerClient > 0 {
 		cfg.RPCMaxConnsPerClient = runtimeCfg.RPCMaxConnsPerClient
+	}
+	if runtimeCfg.RPCMaxHeaderBytes > 0 {
+		cfg.RPCMaxHeaderBytes = runtimeCfg.RPCMaxHeaderBytes
 	}
 
 	// RPC-related performance configs. We allow explicit zero value to disable so
@@ -1546,6 +1584,9 @@ func newConsulConfig(runtimeCfg *config.RuntimeConfig, logger hclog.Logger) (*co
 
 	cfg.DefaultQueryTime = runtimeCfg.DefaultQueryTime
 	cfg.MaxQueryTime = runtimeCfg.MaxQueryTime
+	if runtimeCfg.FederationStateAntiEntropySyncInterval > 0 {
+		cfg.FederationStateAntiEntropySyncInterval = runtimeCfg.FederationStateAntiEntropySyncInterval
+	}
 
 	cfg.AutoEncryptAllowTLS = runtimeCfg.AutoEncryptAllowTLS
 
@@ -1561,6 +1602,15 @@ func newConsulConfig(runtimeCfg *config.RuntimeConfig, logger hclog.Logger) (*co
 
 		cfg.CAConfig = ca
 	}
+
+	// TokenDirs must be carried in the consul.Config field, not inside the
+	// mutable CAConfig.Config map. Storing it in the map means an
+	// operator:write API caller can overwrite it via ConnectCA.ConfigurationSet
+	// and bypass the file-read allowlist restriction.
+	cfg.TokenDirs = runtimeCfg.TokenDirs
+
+	cfg.ConnectVirtualIPCIDRv4 = runtimeCfg.ConnectVirtualIPCIDRv4
+	cfg.ConnectVirtualIPCIDRv6 = runtimeCfg.ConnectVirtualIPCIDRv6
 
 	// copy over auto runtimeCfg settings
 	cfg.AutoConfigEnabled = runtimeCfg.AutoConfig.Enabled
@@ -1596,9 +1646,9 @@ func newConsulConfig(runtimeCfg *config.RuntimeConfig, logger hclog.Logger) (*co
 	cfg.RequestLimitsWriteRate = runtimeCfg.RequestLimitsWriteRate
 	cfg.Locality = runtimeCfg.StructLocality()
 
-	cfg.Cloud = runtimeCfg.Cloud
-
 	cfg.Reporting.License.Enabled = runtimeCfg.Reporting.License.Enabled
+	cfg.Reporting.SnapshotRetentionTime = runtimeCfg.Reporting.SnapshotRetentionTime
+	cfg.DefaultIntentionPolicy = runtimeCfg.DefaultIntentionPolicy
 
 	cfg.ServerRejoinAgeMax = runtimeCfg.ServerRejoinAgeMax
 	cfg.EnableXDSLoadBalancing = runtimeCfg.EnableXDSLoadBalancing
@@ -1775,11 +1825,6 @@ func (a *Agent) ShutdownAgent() error {
 
 	a.rpcClientHealth.Close()
 	a.rpcClientConfigEntry.Close()
-
-	// Shutdown SCADA provider
-	if a.scadaProvider != nil {
-		a.scadaProvider.Stop()
-	}
 
 	var err error
 	if a.delegate != nil {
@@ -2155,6 +2200,10 @@ type persistedService struct {
 	// to exclude it from API output, but we need it to properly deregister
 	// persisted sidecars.
 	LocallyRegisteredAsSidecar bool `json:",omitempty"`
+	// we need it tracks whether default sidecar checks (TCP + alias) were
+	// disabled at registration time. Persisted to maintain consistent check configuration
+	// across agent restarts/reloads. Excluded from API responses but required for state restoration.
+	DisableSidecarDefaultChecks bool `json:",omitempty"`
 }
 
 func (a *Agent) makeServiceFilePath(svcID structs.ServiceID) string {
@@ -2162,15 +2211,16 @@ func (a *Agent) makeServiceFilePath(svcID structs.ServiceID) string {
 }
 
 // persistService saves a service definition to a JSON file in the data dir
-func (a *Agent) persistService(service *structs.NodeService, source configSource) error {
+func (a *Agent) persistService(service *structs.NodeService, source configSource, disableSidecarDefaultChecks bool) error {
 	svcID := service.CompoundServiceID()
 	svcPath := a.makeServiceFilePath(svcID)
 
 	wrapped := persistedService{
-		Token:                      a.State.ServiceToken(service.CompoundServiceID()),
-		Service:                    service,
-		Source:                     source.String(),
-		LocallyRegisteredAsSidecar: service.LocallyRegisteredAsSidecar,
+		Token:                       a.State.ServiceToken(service.CompoundServiceID()),
+		Service:                     service,
+		Source:                      source.String(),
+		LocallyRegisteredAsSidecar:  service.LocallyRegisteredAsSidecar,
+		DisableSidecarDefaultChecks: disableSidecarDefaultChecks,
 	}
 	encoded, err := json.Marshal(wrapped)
 	if err != nil {
@@ -2366,15 +2416,18 @@ func (a *Agent) addServiceLocked(req addServiceLockedRequest) error {
 			if err != nil {
 				return err
 			}
+
 			req.Service.Port = port
 		}
 		// Setup default check if none given.
-		if len(req.chkTypes) < 1 {
+		if len(req.chkTypes) < 1 && !req.disableSidecarDefaultChecks {
 			req.chkTypes = sidecarDefaultChecks(req.Service.ID, req.Service.Address, req.Service.Proxy.LocalServiceAddress, req.Service.Port)
+		} else {
+			req.disableSidecarDefaultChecks = true
 		}
 	}
 
-	req.Service.EnterpriseMeta.Normalize()
+	req.Service.Normalize()
 
 	if err := a.validateService(req.Service, req.chkTypes); err != nil {
 		return err
@@ -2411,12 +2464,13 @@ type addServiceLockedRequest struct {
 // AddServiceRequest contains the fields used to register a service on the local
 // agent using Agent.AddService.
 type AddServiceRequest struct {
-	Service               *structs.NodeService
-	chkTypes              []*structs.CheckType
-	persist               bool
-	token                 string
-	replaceExistingChecks bool
-	Source                configSource
+	Service                     *structs.NodeService
+	chkTypes                    []*structs.CheckType
+	persist                     bool
+	token                       string
+	replaceExistingChecks       bool
+	Source                      configSource
+	disableSidecarDefaultChecks bool
 }
 
 type addServiceInternalRequest struct {
@@ -2448,17 +2502,18 @@ func (a *Agent) addServiceInternal(req addServiceInternalRequest) error {
 	if service.TaggedAddresses == nil {
 		service.TaggedAddresses = map[string]structs.ServiceAddress{}
 	}
+
 	if _, ok := service.TaggedAddresses[structs.TaggedAddressLANIPv4]; !ok && serviceAddressIs4 {
-		service.TaggedAddresses[structs.TaggedAddressLANIPv4] = structs.ServiceAddress{Address: service.Address, Port: service.Port}
+		service.TaggedAddresses[structs.TaggedAddressLANIPv4] = structs.ServiceAddress{Address: service.Address, Port: service.DefaultPort()}
 	}
 	if _, ok := service.TaggedAddresses[structs.TaggedAddressWANIPv4]; !ok && serviceAddressIs4 {
-		service.TaggedAddresses[structs.TaggedAddressWANIPv4] = structs.ServiceAddress{Address: service.Address, Port: service.Port}
+		service.TaggedAddresses[structs.TaggedAddressWANIPv4] = structs.ServiceAddress{Address: service.Address, Port: service.DefaultPort()}
 	}
 	if _, ok := service.TaggedAddresses[structs.TaggedAddressLANIPv6]; !ok && serviceAddressIs6 {
-		service.TaggedAddresses[structs.TaggedAddressLANIPv6] = structs.ServiceAddress{Address: service.Address, Port: service.Port}
+		service.TaggedAddresses[structs.TaggedAddressLANIPv6] = structs.ServiceAddress{Address: service.Address, Port: service.DefaultPort()}
 	}
 	if _, ok := service.TaggedAddresses[structs.TaggedAddressWANIPv6]; !ok && serviceAddressIs6 {
-		service.TaggedAddresses[structs.TaggedAddressWANIPv6] = structs.ServiceAddress{Address: service.Address, Port: service.Port}
+		service.TaggedAddresses[structs.TaggedAddressWANIPv6] = structs.ServiceAddress{Address: service.Address, Port: service.DefaultPort()}
 	}
 
 	var checks []*structs.HealthCheck
@@ -2608,7 +2663,7 @@ func (a *Agent) addServiceInternal(req addServiceInternalRequest) error {
 			req.persistService = service
 		}
 
-		if err := a.persistService(req.persistService, source); err != nil {
+		if err := a.persistService(req.persistService, source, req.disableSidecarDefaultChecks); err != nil {
 			a.cleanupRegistration(cleanupServices, cleanupChecks)
 			return err
 		}
@@ -2659,6 +2714,28 @@ func (a *Agent) validateService(service *structs.NodeService, chkTypes []*struct
 			"1 and 63 bytes.",
 			"service", service.Service,
 		)
+	}
+
+	// for sidecar we are using Ports for multiport related identification and port for default inbound listener both are valid
+	// for multiport service , its sidecar gets port set to the default port which is equivalent to service's port if set
+	// but for non-sidecar services we should not allow both to be set to avoid confusion
+	if !service.LocallyRegisteredAsSidecar && len(service.Ports) > 0 && service.Port != 0 {
+		return fmt.Errorf("Both port and ports cannot be set")
+	}
+
+	if err := service.Ports.Validate(); err != nil {
+		return err
+	}
+	if err := validateEnterpriseMeshPortConfig(service); err != nil {
+		return err
+	}
+
+	for _, port := range service.Ports {
+		if libdns.InvalidNameRe.MatchString(port.Name) {
+			a.logger.Warn("Service Port with name %s will not be discoverable via DNS due to invalid characters. Valid characters include all alpha-numerics and dashes.", port.Name)
+		} else if len(port.Name) > libdns.MaxLabelLength {
+			a.logger.Warn("Service Port with name %s will not be discoverable via DNS due to it being too long. Valid lengths are between 1 and 63 bytes.", "portName", port.Name)
+		}
 	}
 
 	// Warn if any tags are incompatible with DNS
@@ -2855,7 +2932,7 @@ func (a *Agent) AddCheck(check *structs.HealthCheck, chkType *structs.CheckType,
 func (a *Agent) addCheckLocked(check *structs.HealthCheck, chkType *structs.CheckType, persist bool, token string, source configSource) error {
 	var service *structs.NodeService
 
-	check.EnterpriseMeta.Normalize()
+	check.Normalize()
 
 	if check.ServiceID != "" {
 		cid := check.CompoundServiceID()
@@ -2916,6 +2993,14 @@ func (a *Agent) addCheck(check *structs.HealthCheck, chkType *structs.CheckType,
 
 			if source == ConfigSourceRemote && !a.config.EnableRemoteScriptChecks {
 				return fmt.Errorf("Scripts are disabled on this agent from remote calls; to enable, configure 'enable_script_checks' to true")
+			}
+
+			if !a.config.ACLsEnabled && a.config.EnableLocalScriptChecks {
+				a.logger.Warn("Scripts are enabled on this agent without ACLs; this is not recommended for security reasons")
+			}
+
+			if !a.config.ACLsEnabled && a.config.EnableRemoteScriptChecks {
+				a.logger.Warn("Scripts are enabled on this agent from remote calls without ACLs; this is not recommended for security reasons")
 			}
 		}
 	}
@@ -3408,6 +3493,21 @@ func (a *Agent) AdvertiseAddrLAN() string {
 	return a.config.AdvertiseAddrLAN.String()
 }
 
+// DNSRecursors returns the configured DNS recursors from the agent config.
+func (a *Agent) DNSRecursors() []string {
+	resolved := make([]string, 0, len(a.config.DNSRecursors))
+	for _, r := range a.config.DNSRecursors {
+		addr, err := recursorAddr(r)
+		if err != nil {
+			a.logger.Warn("Skipping invalid DNS recursor for Envoy egress listener",
+				"recursor", r, "error", err)
+			continue
+		}
+		resolved = append(resolved, addr)
+	}
+	return resolved
+}
+
 func (a *Agent) cancelCheckMonitors(checkID structs.CheckID) {
 	// Stop any monitors
 	delete(a.checkReapAfter, checkID)
@@ -3630,7 +3730,7 @@ func (a *Agent) storePid() error {
 
 	// Write out the PID
 	pid := os.Getpid()
-	_, err = pidFile.WriteString(fmt.Sprintf("%d", pid))
+	_, err = fmt.Fprintf(pidFile, "%d", pid)
 	if err != nil {
 		return fmt.Errorf("Could not write to pid file: %s", err)
 	}
@@ -3674,8 +3774,8 @@ func (a *Agent) loadServices(conf *config.RuntimeConfig, snap map[structs.CheckI
 	// Register the services from config
 	for _, service := range conf.Services {
 		// Default service partition to the same as agent
-		if service.EnterpriseMeta.PartitionOrEmpty() == "" {
-			service.EnterpriseMeta.OverridePartition(a.AgentEnterpriseMeta().PartitionOrDefault())
+		if service.PartitionOrEmpty() == "" {
+			service.OverridePartition(a.AgentEnterpriseMeta().PartitionOrDefault())
 		}
 
 		ns := service.NodeService()
@@ -3801,7 +3901,7 @@ func (a *Agent) loadServices(conf *config.RuntimeConfig, snap map[structs.CheckI
 		} else if !acl.EqualPartitions(a.AgentEnterpriseMeta().PartitionOrDefault(), p.Service.PartitionOrDefault()) {
 			a.logger.Info("Purging service file in wrong partition",
 				"file", file,
-				"partition", p.Service.EnterpriseMeta.PartitionOrDefault(),
+				"partition", p.Service.PartitionOrDefault(),
 			)
 			if err := os.Remove(file); err != nil {
 				a.logger.Error("Failed purging service file",
@@ -3852,12 +3952,13 @@ func (a *Agent) loadServices(conf *config.RuntimeConfig, snap map[structs.CheckI
 			)
 			err = a.addServiceLocked(addServiceLockedRequest{
 				AddServiceRequest: AddServiceRequest{
-					Service:               p.Service,
-					chkTypes:              nil,
-					persist:               false, // don't rewrite the file with the same data we just read
-					token:                 p.Token,
-					replaceExistingChecks: false, // do default behavior
-					Source:                source,
+					Service:                     p.Service,
+					chkTypes:                    nil,
+					persist:                     false, // don't rewrite the file with the same data we just read
+					token:                       p.Token,
+					replaceExistingChecks:       false, // do default behavior
+					Source:                      source,
+					disableSidecarDefaultChecks: p.DisableSidecarDefaultChecks,
 				},
 				serviceDefaults:      serviceDefaultsFromStruct(persistedServiceConfigs[serviceID]),
 				persistServiceConfig: false, // don't rewrite the file with the same data we just read
@@ -4216,10 +4317,8 @@ func revertStaticConfig(oldCfg tlsutil.ProtocolConfig, newCfg tlsutil.ProtocolCo
 	newOldcfg := newCfg
 	newOldcfg.CertFile = oldCfg.CertFile
 	newOldcfg.KeyFile = oldCfg.KeyFile
-	if !reflect.DeepEqual(newOldcfg, oldCfg) {
-		return true
-	}
-	return false
+
+	return !reflect.DeepEqual(newOldcfg, oldCfg)
 }
 
 // reloadConfigInternal is mainly needed for some unit tests. Instead of parsing
@@ -4283,6 +4382,10 @@ func (a *Agent) reloadConfigInternal(newCfg *config.RuntimeConfig) error {
 		MaxConnsPerClientIP: newCfg.HTTPMaxConnsPerClient,
 	})
 
+	a.grpcConnLimiter.SetConfig(connlimit.Config{
+		MaxConnsPerClientIP: newCfg.GRPCMaxConnsPerClient,
+	})
+
 	for _, s := range a.dnsServers {
 		if err := s.ReloadConfig(newCfg); err != nil {
 			return fmt.Errorf("Failed reloading dns config : %v", err)
@@ -4304,6 +4407,7 @@ func (a *Agent) reloadConfigInternal(newCfg *config.RuntimeConfig) error {
 		RPCRateLimit:          newCfg.RPCRateLimit,
 		RPCMaxBurst:           newCfg.RPCMaxBurst,
 		RPCMaxConnsPerClient:  newCfg.RPCMaxConnsPerClient,
+		RPCMaxHeaderBytes:     newCfg.RPCMaxHeaderBytes,
 		ConfigEntryBootstrap:  newCfg.ConfigEntryBootstrap,
 		RaftSnapshotThreshold: newCfg.RaftSnapshotThreshold,
 		RaftSnapshotInterval:  newCfg.RaftSnapshotInterval,

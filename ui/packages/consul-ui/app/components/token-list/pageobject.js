@@ -1,10 +1,10 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 export default (clickable, attribute, collection, deletable) => () => {
-  return collection('[data-test-tokens] [data-test-tabular-row]', {
+  return collection('[data-test-tokens] tbody tr', {
     id: attribute('data-test-token', '[data-test-token]'),
     token: clickable('a'),
     ...deletable(),

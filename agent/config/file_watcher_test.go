@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package config
@@ -408,7 +408,7 @@ func createTempConfigFile(t *testing.T, filename string) string {
 func randomStr(length int) string {
 	const charset = "abcdefghijklmnopqrstuvwxyz" +
 		"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	var seededRand *rand.Rand = rand.New(
+	var seededRand = rand.New(
 		rand.NewSource(time.Now().UnixNano()))
 	b := make([]byte, length)
 	for i := range b {

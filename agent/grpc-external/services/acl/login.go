@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package acl
@@ -31,7 +31,7 @@ func (s *Server) Login(ctx context.Context, req *pbacl.LoginRequest) (*pbacl.Log
 
 	if err := s.ValidateEnterpriseRequest(&entMeta, true); err != nil {
 		logger.Error("error during enterprise request validation", "error", err.Error())
-		return nil, status.Errorf(codes.Internal, err.Error())
+		return nil, status.Error(codes.Internal, err.Error())
 	}
 
 	// Forward request to leader in the correct datacenter.
@@ -71,13 +71,18 @@ func (s *Server) Login(ctx context.Context, req *pbacl.LoginRequest) (*pbacl.Log
 		return nil, status.Error(codes.Unauthenticated, err.Error())
 	}
 
+	name, err := auth.FormatTokenName(authMethod, verifiedIdentity.ProjectedVars, false)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
 	description, err := auth.BuildTokenDescription("token created via login", req.Meta)
 	if err != nil {
 		logger.Error("failed to build token description", "error", err.Error())
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	token, err := s.NewLogin().TokenForVerifiedIdentity(verifiedIdentity, authMethod, description)
+	token, err := s.NewLogin().TokenForVerifiedIdentity(verifiedIdentity, authMethod, name, description)
 	switch {
 	case acl.IsErrPermissionDenied(err):
 		return nil, status.Error(codes.PermissionDenied, err.Error())

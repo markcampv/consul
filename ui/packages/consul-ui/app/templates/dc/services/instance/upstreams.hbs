@@ -4,24 +4,24 @@
 }}
 
 <Route
-  @name={{routeName}}
+  @name={{this.routeName}}
 as |route|>
   <div class="tab-section">
   {{#let
 
     (hash
-      value=(or sortBy "DestinationName:asc")
-      change=(action (mut sortBy) value="target.selected")
+      value=(or this.sortBy "DestinationName:asc")
+      change=(action (mut this.sortBy) value="target.selected")
     )
 
     (hash
       searchproperty=(hash
-        value=(if (not-eq searchproperty undefined)
-          (split searchproperty ',')
-          searchProperties
+        value=(if (not-eq this.searchproperty undefined)
+          (split this.searchproperty ',')
+          this.searchProperties
         )
-        change=(action (mut searchproperty) value="target.selectedItems")
-        default=searchProperties
+        change=(action (mut this.searchproperty) value="target.selectedItems")
+        default=this.searchProperties
       )
     )
 
@@ -34,18 +34,6 @@ as |route|>
     route.model.proxy.Service.Proxy.Upstreams
 
   as |sort filters partition nspace dc proxy meta items|}}
-      {{#if (gt items.length 0)}}
-        <input type="checkbox" id="toolbar-toggle" />
-        <Consul::UpstreamInstance::SearchBar
-          @search={{search}}
-          @onsearch={{action (mut search) value="target.value"}}
-          @searchproperties={{searchProperties}}
-
-          @sort={{sort}}
-
-          @filter={{filters}}
-        />
-      {{/if}}
       {{! TODO: Looks like we can get this straight from item.Proxy.Mode }}
       {{! the less we need `proxy` and `meta` the better }}
       {{#if (eq meta.ServiceProxy.Mode 'transparent')}}
@@ -63,29 +51,41 @@ as |route|>
           />
         </Hds::Alert>
       {{/if}}
+      {{! The toolbar is rendered outside DataCollection so it persists when
+          filters/search reduce the visible rows to zero. It only appears when
+          there are actual upstreams on this instance. }}
+      {{#if (gt items.length 0)}}
+        <Consul::UpstreamInstance::Toolbar
+          @sort={{sort}}
+          @search={{this.search}}
+          @onsearch={{action (mut this.search) value="target.value"}}
+          @filter={{filters}}
+        />
+      {{/if}}
       <DataCollection
         @type="upstream-instance"
         @sort={{sort.value}}
         @filters={{filters}}
-        @search={{search}}
+        @search={{this.search}}
         @items={{items}}
       as |collection|>
         <collection.Collection>
-          <Consul::UpstreamInstance::List
+          <Consul::UpstreamInstance::Table
             @items={{collection.items}}
             @dc={{dc}}
             @nspace={{nspace}}
             @partition={{partition}}
+            @card={{true}}
           />
         </collection.Collection>
         <collection.Empty>
           <EmptyState>
-            <BlockSlot @name="body">
+            <:body>
               {{t "routes.dc.services.instance.upstreams.empty"
                 items=items.length
                 htmlSafe=true
               }}
-            </BlockSlot>
+            </:body>
           </EmptyState>
         </collection.Empty>
       </DataCollection>

@@ -4,17 +4,17 @@
 }}
 
 <Route
-  @name={{routeName}}
+  @name={{this.routeName}}
 as |route|>
   <AppView>
-    <BlockSlot @name="header">
+    <:header>
       <h1>
         <route.Title @title={{compute (fn route.t 'title')}} />
       </h1>
-    </BlockSlot>
-    <BlockSlot @name="toolbar">
-    </BlockSlot>
-    <BlockSlot @name="nav">
+    </:header>
+    <:toolbar>
+    </:toolbar>
+    <:content>
 
 {{#let
     (from-entries (array
@@ -35,39 +35,45 @@ as |tabs|}}
 (if tabs.serverstatus
             (hash
               label=(compute (fn route.t 'serverstatus.title'))
-              href=(href-to "dc.show.serverstatus")
+              route="dc.show.serverstatus"
               selected=(is-href "dc.show.serverstatus")
             )
 '')
 (if tabs.cataloghealth
             (hash
               label=(compute (fn route.t 'cataloghealth.title'))
-              href=(href-to 'dc.show.cataloghealth')
+              route='dc.show.cataloghealth'
               selected=(is-href 'dc.show.cataloghealth')
             )
 '')
 (if tabs.license
             (hash
               label=(compute (fn route.t 'license.title'))
-              href=(href-to 'dc.show.license')
+              route='dc.show.license'
               selected=(is-href 'dc.show.license')
             )
           )
 '')
-      }}/>
-{{/if}}
-
-  {{/let}}
-{{/let}}
-    </BlockSlot>
-    <BlockSlot @name="content">
+      }}>
+        <Outlet
+          @name={{this.routeName}}
+          @model={{route.model}}
+        as |o|>
+          {{outlet}}
+        </Outlet>
+      </TabNav>
+{{else}}
       <Outlet
-        @name={{routeName}}
+        @name={{this.routeName}}
         @model={{route.model}}
       as |o|>
         {{outlet}}
       </Outlet>
-    </BlockSlot>
+{{/if}}
+
+  {{/let}}
+{{/let}}
+    </:content>
 
   </AppView>
 </Route>

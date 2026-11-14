@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package usagemetrics
@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/armon/go-metrics"
-	"github.com/armon/go-metrics/prometheus"
 	"github.com/hashicorp/go-hclog"
+	"github.com/hashicorp/go-metrics"
+	"github.com/hashicorp/go-metrics/prometheus"
 	"github.com/hashicorp/go-uuid"
 	"github.com/hashicorp/serf/serf"
 	"github.com/stretchr/testify/assert"
@@ -208,6 +208,14 @@ var baseCases = map[string]testCase{
 					{Name: "kind", Value: "mesh-gateway"},
 				},
 			},
+			"consul.usage.test.state.connect_instances;datacenter=dc1;kind=inference-gateway": {
+				Name:  "consul.usage.test.state.connect_instances",
+				Value: 0,
+				Labels: []metrics.Label{
+					{Name: "datacenter", Value: "dc1"},
+					{Name: "kind", Value: "inference-gateway"},
+				},
+			},
 			"consul.usage.test.state.connect_instances;datacenter=dc1;kind=connect-native": {
 				Name:  "consul.usage.test.state.connect_instances",
 				Value: 0,
@@ -334,6 +342,14 @@ var baseCases = map[string]testCase{
 					{Name: "kind", Value: "bound-api-gateway"},
 				},
 			},
+			"consul.usage.test.state.config_entries;datacenter=dc1;kind=inference-gateway": {
+				Name:  "consul.usage.test.state.config_entries",
+				Value: 0,
+				Labels: []metrics.Label{
+					{Name: "datacenter", Value: "dc1"},
+					{Name: "kind", Value: "inference-gateway"},
+				},
+			},
 			"consul.usage.test.state.config_entries;datacenter=dc1;kind=file-system-certificate": {
 				Name:  "consul.usage.test.state.config_entries",
 				Value: 0,
@@ -380,6 +396,14 @@ var baseCases = map[string]testCase{
 				Labels: []metrics.Label{
 					{Name: "datacenter", Value: "dc1"},
 					{Name: "kind", Value: "control-plane-request-limit"},
+				},
+			},
+			"consul.usage.test.state.config_entries;datacenter=dc1;kind=rate-limit": {
+				Name:  "consul.usage.test.state.config_entries",
+				Value: 0,
+				Labels: []metrics.Label{
+					{Name: "datacenter", Value: "dc1"},
+					{Name: "kind", Value: "rate-limit"},
 				},
 			},
 			// --- version ---
@@ -489,6 +513,14 @@ var baseCases = map[string]testCase{
 					{Name: "kind", Value: "mesh-gateway"},
 				},
 			},
+			"consul.usage.test.state.connect_instances;datacenter=dc1;kind=inference-gateway": {
+				Name:  "consul.usage.test.state.connect_instances",
+				Value: 0,
+				Labels: []metrics.Label{
+					{Name: "datacenter", Value: "dc1"},
+					{Name: "kind", Value: "inference-gateway"},
+				},
+			},
 			"consul.usage.test.state.connect_instances;datacenter=dc1;kind=connect-native": {
 				Name:  "consul.usage.test.state.connect_instances",
 				Value: 0,
@@ -615,6 +647,14 @@ var baseCases = map[string]testCase{
 					{Name: "kind", Value: "bound-api-gateway"},
 				},
 			},
+			"consul.usage.test.state.config_entries;datacenter=dc1;kind=inference-gateway": {
+				Name:  "consul.usage.test.state.config_entries",
+				Value: 0,
+				Labels: []metrics.Label{
+					{Name: "datacenter", Value: "dc1"},
+					{Name: "kind", Value: "inference-gateway"},
+				},
+			},
 			"consul.usage.test.state.config_entries;datacenter=dc1;kind=file-system-certificate": {
 				Name:  "consul.usage.test.state.config_entries",
 				Value: 0,
@@ -661,6 +701,14 @@ var baseCases = map[string]testCase{
 				Labels: []metrics.Label{
 					{Name: "datacenter", Value: "dc1"},
 					{Name: "kind", Value: "control-plane-request-limit"},
+				},
+			},
+			"consul.usage.test.state.config_entries;datacenter=dc1;kind=rate-limit": {
+				Name:  "consul.usage.test.state.config_entries",
+				Value: 0,
+				Labels: []metrics.Label{
+					{Name: "datacenter", Value: "dc1"},
+					{Name: "kind", Value: "rate-limit"},
 				},
 			},
 			// --- version ---
@@ -926,6 +974,14 @@ func testUsageReporter_emitServiceUsage_CE(t *testing.T, getMetricsReporter func
 		Labels: []metrics.Label{
 			{Name: "datacenter", Value: "dc1"},
 			{Name: "kind", Value: "ingress-gateway"},
+		},
+	}
+	nodesAndSvcsCase.expectedGauges["consul.usage.test.state.config_entries;datacenter=dc1;kind=rate-limit"] = metrics.GaugeValue{
+		Name:  "consul.usage.test.state.config_entries",
+		Value: 0,
+		Labels: []metrics.Label{
+			{Name: "datacenter", Value: "dc1"},
+			{Name: "kind", Value: "rate-limit"},
 		},
 	}
 	cases["nodes-and-services"] = nodesAndSvcsCase

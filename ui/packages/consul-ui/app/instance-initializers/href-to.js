@@ -1,9 +1,7 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
-
-import LinkComponent from '@ember/routing/link-component';
 
 export class HrefTo {
   constructor(container, target) {
@@ -16,7 +14,7 @@ export class HrefTo {
   handle(e) {
     if (this.shouldHandle(e)) {
       e.preventDefault();
-      this.applicationInstance.lookup('router:main').location.transitionTo(this.url);
+      this.applicationInstance.lookup('service:router').location.transitionTo(this.url);
     }
   }
 
@@ -27,9 +25,17 @@ export class HrefTo {
       !this.isExternal(this.target) &&
       !this.hasActionHelper(this.target) &&
       !this.hasDownload(this.target) &&
-      !this.isLinkComponent(this.target)
+      !this.isLinkComponent(this.target) &&
+      !this.isHashOnly(this.url)
     );
     // && this.recognizeUrl(this.url);
+  }
+
+  // In-page anchors (e.g. `#hds-main`, used by "skip to main content" links)
+  // aren't application routes, so let the browser handle them natively
+  // instead of forwarding them to the router as a transition.
+  isHashOnly(url) {
+    return typeof url === 'string' && url.charAt(0) === '#';
   }
 
   isUnmodifiedLeftClick(e) {
@@ -56,8 +62,18 @@ export class HrefTo {
     let isLinkComponent = false;
     const id = $el.id;
     if (id) {
-      const componentInstance = this.applicationInstance.lookup('-view-registry:main')[id];
-      isLinkComponent = componentInstance && componentInstance instanceof LinkComponent;
+      const viewRegistry = this.applicationInstance.lookup('-view-registry:main');
+      if (!viewRegistry) {
+        return false;
+      }
+      const componentInstance = viewRegistry[id];
+      // In Ember 5.x, check if it's a LinkTo component by checking the element attributes
+      // or component instance properties rather than instanceof check
+      isLinkComponent =
+        componentInstance &&
+        (componentInstance.constructor.name === 'LinkToComponent' ||
+          (componentInstance.tagName === 'a' &&
+            Object.prototype.hasOwnProperty.call(componentInstance, 'route')));
     }
     return isLinkComponent;
   }
@@ -142,12 +158,15 @@ export default {
       };
 
       doc.body.addEventListener('click', listener);
-      container.reopen({
-        willDestroy() {
-          doc.body.removeEventListener('click', listener);
-          return this._super(...arguments);
-        },
-      });
+
+      // Store original destroy method
+      const originalDestroy = container.willDestroy || function () {};
+
+      // Override without reopening
+      container.willDestroy = function () {
+        doc.body.removeEventListener('click', listener);
+        return originalDestroy.call(this);
+      };
     }
   },
 };

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright (c) HashiCorp, Inc.
+# Copyright IBM Corp. 2024, 2026
 # SPDX-License-Identifier: BUSL-1.1
 
 
@@ -45,8 +45,10 @@ function retry_default {
   return $ret
 }
 
+# retry_long allows approximately 120s for health, xDS, and peering convergence.
+# The loop exits as soon as the command succeeds, so passing runs incur no extra time.
 function retry_long {
-  retry 30 1 "$@"
+  retry 120 1 "$@"
 }
 
 # assert_upstream_message asserts both the returned code
@@ -238,7 +240,7 @@ function get_envoy_http_rbac_once {
   local HOSTPORT=$1
   run curl -s -f $HOSTPORT/config_dump
   [ "$status" -eq 0 ]
-  echo "$output" | jq --raw-output '.configs[2].dynamic_listeners[].active_state.listener.filter_chains[0].filters[0].typed_config.http_filters[] | select(.name == "envoy.filters.http.rbac") | .typed_config'
+  echo "$output" | jq --raw-output '.configs[] | select(."@type" == "type.googleapis.com/envoy.admin.v3.ListenersConfigDump") | .dynamic_listeners[].active_state.listener | (.filter_chains[0].filters[0].typed_config.http_filters // [])[] | select(.name == "envoy.filters.http.rbac") | .typed_config'
 }
 
 function assert_envoy_network_rbac_policy_count {
@@ -254,7 +256,7 @@ function get_envoy_network_rbac_once {
   local HOSTPORT=$1
   run curl -s -f $HOSTPORT/config_dump
   [ "$status" -eq 0 ]
-  echo "$output" | jq --raw-output '.configs[2].dynamic_listeners[].active_state.listener.filter_chains[0].filters[] | select(.name == "envoy.filters.network.rbac") | .typed_config'
+  echo "$output" | jq --raw-output '.configs[] | select(."@type" == "type.googleapis.com/envoy.admin.v3.ListenersConfigDump") | .dynamic_listeners[].active_state.listener | (.filter_chains[0].filters // [])[] | select(.name == "envoy.filters.network.rbac") | .typed_config'
 }
 
 function get_envoy_http_filter {
@@ -262,21 +264,48 @@ function get_envoy_http_filter {
   local FILTER_NAME=$2
   run retry_default curl -s -f $HOSTPORT/config_dump
   [ "$status" -eq 0 ]
-  echo "$output" | jq --raw-output ".configs[2].dynamic_listeners[] | .active_state.listener.filter_chains[].filters[] | select(.name == \"envoy.filters.network.http_connection_manager\") | .typed_config.http_filters[] | select(.name == \"${FILTER_NAME}\")"
+  echo "$output" | jq --raw-output ".configs[] | select(.\"@type\" == \"type.googleapis.com/envoy.admin.v3.ListenersConfigDump\") | .dynamic_listeners[] | .active_state.listener | (.filter_chains // [])[] | (.filters // [])[] | select(.name == \"envoy.filters.network.http_connection_manager\") | (.typed_config.http_filters // [])[] | select(.name == \"${FILTER_NAME}\")"
 }
 
 function get_envoy_listener_filters {
   local HOSTPORT=$1
   run retry_default curl -s -f $HOSTPORT/config_dump
   [ "$status" -eq 0 ]
-  echo "$output" | jq --raw-output '.configs[2].dynamic_listeners[].active_state.listener | "\(.name) \( .filter_chains[0].filters | map(.name) | join(","))"'
+  echo "$output" | jq --raw-output '.configs[] | select(."@type" == "type.googleapis.com/envoy.admin.v3.ListenersConfigDump") | .dynamic_listeners[].active_state.listener | "\(.name) \((.filter_chains[0].filters // []) | map(.name) | join(","))"'
 }
 
 function get_envoy_http_filters {
   local HOSTPORT=$1
   run retry_default curl -s -f $HOSTPORT/config_dump
   [ "$status" -eq 0 ]
-  echo "$output" | jq --raw-output '.configs[2].dynamic_listeners[].active_state.listener | "\(.name) \( .filter_chains[0].filters[] | select(.name == "envoy.filters.network.http_connection_manager") | .typed_config.http_filters | map(.name) | join(","))"'
+  echo "$output" | jq --raw-output '.configs[] | select(."@type" == "type.googleapis.com/envoy.admin.v3.ListenersConfigDump") | .dynamic_listeners[].active_state.listener | "\(.name) \((.filter_chains[0].filters // [])[] | select(.name == "envoy.filters.network.http_connection_manager") | .typed_config.http_filters | map(.name) | join(","))"'
+}
+
+# get_envoy_dns_listener_once returns the active listener JSON for the (UDP)
+# dns_filter listener whose name starts with LISTENER_NAME (e.g. "virtual_dns"
+# or "egress_dns"). It returns non-zero when the listener is not yet present so
+# that it can be retried while xDS converges.
+function get_envoy_dns_listener_once {
+  local HOSTPORT=$1
+  local LISTENER_NAME=$2
+  run curl -s -f $HOSTPORT/config_dump
+  [ "$status" -eq 0 ]
+  local body
+  body=$(echo "$output" | jq --raw-output ".configs[] | select(.\"@type\" == \"type.googleapis.com/envoy.admin.v3.ListenersConfigDump\") | .dynamic_listeners[] | select(.name | startswith(\"${LISTENER_NAME}:\")) | .active_state.listener")
+  if [ -z "$body" ]; then
+    return 1
+  fi
+  echo "$body"
+}
+
+# get_envoy_dns_listener retries until the named dns_filter listener is active
+# and echoes its listener JSON for further jq assertions.
+function get_envoy_dns_listener {
+  local HOSTPORT=$1
+  local LISTENER_NAME=$2
+  run retry_long get_envoy_dns_listener_once "$HOSTPORT" "$LISTENER_NAME"
+  [ "$status" -eq 0 ]
+  echo "$output"
 }
 
 function get_envoy_dynamic_cluster_once {
@@ -652,7 +681,7 @@ function docker_consul_for_proxy_bootstrap {
 function docker_wget {
   local DC=$1
   shift 1
-  docker run --rm --network container:envoy_consul-${DC}_1 docker.mirror.hashicorp.services/alpine:3.20 wget "$@"
+  docker run --rm --network container:envoy_consul-${DC}_1 docker.mirror.hashicorp.services/alpine:3.22 wget "$@"
 }
 
 function docker_curl {
@@ -839,9 +868,10 @@ function must_fail_http_request {
 function get_echo_output {
   # Take the JSON response from $output, starting with first line containing only '{'
   # and ending with the next line containing only '}'.
-  # The first sed converts a trailing '}* <some text...>' (curl -v output) to just '}'.
-  local json=$(echo "$output" | sed 's/}\*.*/}/' | sed -n -e '/^{$/,/^}$/{ p; }')
-  echo $json | jq -r '.' || echo "Output did not contain valid JSON: $output" >&3
+  # The first sed drops curl verbose lines that start with '*'.
+  # The second sed converts a trailing '}* <some text...>' fragment to just '}'.
+  local json=$(echo "$output" | sed '/^\*/d' | sed 's/}\*.*/}/' | sed -n -e '/^{$/,/^}$/{ p; }')
+  printf '%s\n' "$json" | jq -r '.' || echo "Output did not contain valid JSON: $output" >&3
 }
 
 # Gets the value of the raw request path from the echo service response.
@@ -871,7 +901,8 @@ function gen_envoy_bootstrap {
   if output=$(docker_consul_for_proxy_bootstrap "$DC" connect envoy -bootstrap \
     -proxy-id $PROXY_ID \
     -envoy-version "$ENVOY_VERSION" \
-    -admin-bind 0.0.0.0:$ADMIN_PORT ${EXTRA_ENVOY_BS_ARGS} 2>&1); then
+    -admin-bind 0.0.0.0:$ADMIN_PORT \
+    -grpc-addr http://localhost:8502 ${EXTRA_ENVOY_BS_ARGS} 2>&1); then
 
     # All OK, write config to file
     echo "$output" >workdir/${DC}/envoy/$SERVICE-bootstrap.json
@@ -996,22 +1027,33 @@ function get_upstream_fortio_name {
   local PORT=$2
   local PREFIX=$3
   local DEBUG_HEADER_VALUE="${4:-""}"
-  local extra_args
-  if [[ -n "${DEBUG_HEADER_VALUE}" ]]; then
-    extra_args="-H x-test-debug:${DEBUG_HEADER_VALUE}"
-  fi
-  # split proto if https:// is at the front of the host since the --resolve
-  # string needs just a bare host.
   local PROTO=""
-  local CA_FILE=""
-  if [ "${HOST:0:8}" = "https://" ]; then
-    HOST="${HOST:8}"
+  local -a curl_args
+
+  # Strip optional scheme/path so --resolve always receives a bare hostname.
+  case "$HOST" in
+  https://*)
     PROTO="https://"
-    extra_args="${extra_args} --cacert /workdir/test-sds-server/certs/ca-root.crt"
+    HOST="${HOST#https://}"
+    ;;
+  http://*)
+    PROTO="http://"
+    HOST="${HOST#http://}"
+    ;;
+  esac
+  HOST="${HOST%%/*}"
+
+  curl_args=(-v -s -f --resolve "${HOST}:${PORT}:127.0.0.1")
+  if [[ -n "${DEBUG_HEADER_VALUE}" ]]; then
+    curl_args+=("-H" "x-test-debug:${DEBUG_HEADER_VALUE}")
   fi
+  if [ "$PROTO" = "https://" ]; then
+    curl_args+=("--cacert" "/workdir/test-sds-server/certs/ca-root.crt")
+  fi
+
   # We use --resolve instead of setting a Host header since we need the right
   # name to be sent for SNI in some cases too.
-  run retry_default curl -v -s -f --resolve "${HOST}:${PORT}:127.0.0.1" $extra_args \
+  run retry_default curl "${curl_args[@]}" \
     "${PROTO}${HOST}:${PORT}${PREFIX}/debug?env=dump"
 
   # Useful Debugging but breaks the expectation that the value output is just
@@ -1030,7 +1072,7 @@ function assert_expected_fortio_name {
   local URL_PREFIX=${4:-""}
   local DEBUG_HEADER_VALUE="${5:-""}"
 
-  run get_upstream_fortio_name ${HOST} ${PORT} "${URL_PREFIX}" "${DEBUG_HEADER_VALUE}"
+  run get_upstream_fortio_name "${HOST}" "${PORT}" "${URL_PREFIX}" "${DEBUG_HEADER_VALUE}"
 
   echo "GOT: $output"
 
@@ -1045,7 +1087,7 @@ function assert_expected_fortio_name_pattern {
   local URL_PREFIX=${4:-""}
   local DEBUG_HEADER_VALUE="${5:-""}"
 
-  GOT=$(get_upstream_fortio_name ${HOST} ${PORT} "${URL_PREFIX}" "${DEBUG_HEADER_VALUE}")
+  GOT=$(get_upstream_fortio_name "${HOST}" "${PORT}" "${URL_PREFIX}" "${DEBUG_HEADER_VALUE}")
 
   if [[ "$GOT" =~ $EXPECT_NAME_PATTERN ]]; then
     :
@@ -1077,7 +1119,7 @@ function assert_expected_fortio_host_header {
   local URL_PREFIX=${4:-""}
   local DEBUG_HEADER_VALUE="${5:-""}"
 
-  GOT=$(get_upstream_fortio_host_header ${HOST} ${PORT} "${URL_PREFIX}" "${DEBUG_HEADER_VALUE}")
+  GOT=$(get_upstream_fortio_host_header "${HOST}" "${PORT}" "${URL_PREFIX}" "${DEBUG_HEADER_VALUE}")
 
   if [ "$GOT" != "Host: ${EXPECT_HOST}" ]; then
     echo "expected Host header: $EXPECT_HOST, actual Host header: $GOT" 1>&2
@@ -1186,4 +1228,50 @@ function assert_url_header {
   run get_url_header "$URL" "$HEADER"
   [ "$status" == 0 ]
   [ "$VALUE" = "$output" ]
+}
+
+function assert_envoy_max_request_headers_kb {
+  local HOSTPORT=$1
+  local EXPECT_SIZE_KB=$2
+  
+  echo "Checking Envoy max_request_headers_kb at $HOSTPORT, expecting $EXPECT_SIZE_KB KB"
+  
+  # Use existing retry_default pattern like get_envoy_http_filter and others
+  run retry_default curl -s -f $HOSTPORT/config_dump
+  [ "$status" -eq 0 ]
+  
+  # Extract all max_request_headers_kb values (handles multiple values like your example)
+  local VALUES=$(echo "$output" | jq -r '
+    .configs[]
+    | select(."@type"=="type.googleapis.com/envoy.admin.v3.ListenersConfigDump")
+    | (.dynamic_listeners[]? | .active_state.listener)
+    | .filter_chains[]?
+    | .filters[]?
+    | select(.name=="envoy.filters.network.http_connection_manager")
+    | .typed_config.max_request_headers_kb // empty
+  ')
+  
+  echo "Found max_request_headers_kb values: $VALUES"
+  
+  # Check that we found at least one value
+  [ -n "$VALUES" ]
+  
+  # Check that all values match the expected value
+  # Convert values to an array and verify each one
+  local all_match=true
+  while IFS= read -r value; do
+    if [ -n "$value" ] && [ "$value" != "$EXPECT_SIZE_KB" ]; then
+      echo "ERROR: Found value $value, expected $EXPECT_SIZE_KB"
+      all_match=false
+    fi
+  done <<< "$VALUES"
+  
+  # Ensure at least one value was found and all matched
+  if [ "$all_match" = "true" ]; then
+    echo "SUCCESS: All max_request_headers_kb values match expected $EXPECT_SIZE_KB KB"
+    return 0
+  else
+    echo "FAILURE: Not all max_request_headers_kb values match expected $EXPECT_SIZE_KB KB"
+    return 1
+  fi
 }

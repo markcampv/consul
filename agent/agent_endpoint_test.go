@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package agent
@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,13 +21,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/armon/go-metrics"
 	"github.com/mitchellh/hashstructure"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/time/rate"
 
 	"github.com/hashicorp/go-hclog"
+	"github.com/hashicorp/go-metrics"
 	"github.com/hashicorp/go-uuid"
 	"github.com/hashicorp/serf/serf"
 
@@ -40,7 +41,6 @@ import (
 	"github.com/hashicorp/consul/agent/local"
 	"github.com/hashicorp/consul/agent/structs"
 	"github.com/hashicorp/consul/agent/token"
-	tokenStore "github.com/hashicorp/consul/agent/token"
 	"github.com/hashicorp/consul/api"
 	"github.com/hashicorp/consul/envoyextensions/xdscommon"
 	"github.com/hashicorp/consul/lib"
@@ -113,6 +113,44 @@ func TestAgent_Services(t *testing.T) {
 	assert.Lenf(t, val, 1, "bad services: %v", val)
 	assert.Equal(t, 5000, val["mysql"].Port)
 	assert.Equal(t, srv1.Meta, val["mysql"].Meta)
+}
+
+// InternalRPCMethods endpoint returns a list of known net/rpc method names.
+func TestAgent_InternalRPCMethods(t *testing.T) {
+	if testing.Short() {
+		t.Skip("too slow for testing.Short")
+	}
+
+	t.Parallel()
+	a := NewTestAgent(t, TestACLConfig())
+	defer func() { _ = a.Shutdown() }()
+
+	testrpc.WaitForLeader(t, a.RPC, "dc1")
+
+	t.Run("no token", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodGet, "/v1/internal/rpc/methods", nil)
+		resp := httptest.NewRecorder()
+		a.srv.h.ServeHTTP(resp, req)
+
+		require.Equal(t, http.StatusForbidden, resp.Code)
+	})
+
+	operatorReadToken := testCreateToken(t, a, `operator = "read"`)
+
+	t.Run("operator read token", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodGet, "/v1/internal/rpc/methods", nil)
+		req.Header.Add("X-Consul-Token", operatorReadToken)
+		resp := httptest.NewRecorder()
+		a.srv.h.ServeHTTP(resp, req)
+
+		require.Equal(t, http.StatusOK, resp.Code)
+
+		var methods []string
+		require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &methods))
+		require.NotEmpty(t, methods)
+		// Spot-check for a stable, core RPC method.
+		require.Contains(t, methods, "Status.Ping")
+	})
 }
 
 func TestAgent_ServicesFiltered(t *testing.T) {
@@ -1728,7 +1766,7 @@ func newDefaultBaseDeps(t *testing.T) BaseDeps {
 func TestHTTPHandlers_AgentMetricsStream_ACLDeny(t *testing.T) {
 	t.Skip("this test panics without a license manager in enterprise")
 	bd := newDefaultBaseDeps(t)
-	bd.Tokens = new(tokenStore.Store)
+	bd.Tokens = new(token.Store)
 	sink := metrics.NewInmemSink(30*time.Millisecond, time.Second)
 	bd.MetricsConfig = &lib.MetricsConfig{
 		Handler: sink,
@@ -1760,7 +1798,7 @@ func TestHTTPHandlers_AgentMetricsStream_ACLDeny(t *testing.T) {
 func TestHTTPHandlers_AgentMetricsStream(t *testing.T) {
 	t.Skip("this test panics without a license manager in enterprise")
 	bd := newDefaultBaseDeps(t)
-	bd.Tokens = new(tokenStore.Store)
+	bd.Tokens = new(token.Store)
 	sink := metrics.NewInmemSink(20*time.Millisecond, time.Second)
 	bd.MetricsConfig = &lib.MetricsConfig{
 		Handler: sink,
@@ -3497,6 +3535,20 @@ func TestAgent_UpdateCheck(t *testing.T) {
 			t.Fatalf("expected 400, got %d", resp.Code)
 		}
 	})
+
+	t.Run("oversized body returns 413", func(t *testing.T) {
+		// Send a body larger than maxAgentRequestBodyBytes (512 KiB) to verify
+		// HTTP 413 is returned before ACL authorization, closing the
+		// HTTP 413 is returned before ACL authorization occurs.
+		oversized := checkUpdate{
+			Status: api.HealthPassing,
+			Output: strings.Repeat("A", maxAgentRequestBodyBytes+1),
+		}
+		req, _ := http.NewRequest("PUT", "/v1/agent/check/update/test", jsonReader(oversized))
+		resp := httptest.NewRecorder()
+		a.srv.h.ServeHTTP(resp, req)
+		require.Equal(t, http.StatusRequestEntityTooLarge, resp.Code)
+	})
 }
 
 func TestAgent_UpdateCheck_ACLDeny(t *testing.T) {
@@ -4959,7 +5011,9 @@ func testAgent_RegisterServiceDeregisterService_Sidecar(t *testing.T, extraHCL s
 			svc, ok := svcs[sid]
 			require.True(t, ok, "has service "+sid.String())
 			assert.Equal(t, sd.Name, svc.Service)
+
 			assert.Equal(t, sd.Port, svc.Port)
+
 			// Ensure that the actual registered service _doesn't_ still have it's
 			// sidecar info since it's duplicate and we don't want that synced up to
 			// the catalog or included in responses particularly - it's just
@@ -5456,7 +5510,9 @@ func testAgent_RegisterServiceDeregisterService_Sidecar_UDP(t *testing.T, extraH
 			svc, ok := svcs[sid]
 			require.True(t, ok, "has service "+sid.String())
 			assert.Equal(t, sd.Name, svc.Service)
+
 			assert.Equal(t, sd.Port, svc.Port)
+
 			// Ensure that the actual registered service _doesn't_ still have it's
 			// sidecar info since it's duplicate and we don't want that synced up to
 			// the catalog or included in responses particularly - it's just
@@ -6133,7 +6189,7 @@ func TestAgent_Monitor(t *testing.T) {
 	t.Run("stream unstructured logs", func(t *testing.T) {
 		// Try to stream logs until we see the expected log line
 		retry.Run(t, func(r *retry.R) {
-			req, _ := http.NewRequest("GET", "/v1/agent/monitor?loglevel=debug", nil)
+			req, _ := http.NewRequest("GET", "/v1/agent/monitor?loglevel=info", nil)
 			cancelCtx, cancelFunc := context.WithCancel(context.Background())
 			req = req.WithContext(cancelCtx)
 
@@ -6479,15 +6535,15 @@ func TestAgent_Token(t *testing.T) {
 
 	type tokens struct {
 		user                string
-		userSource          tokenStore.TokenSource
+		userSource          token.TokenSource
 		agent               string
-		agentSource         tokenStore.TokenSource
+		agentSource         token.TokenSource
 		agentRecovery       string
-		agentRecoverySource tokenStore.TokenSource
+		agentRecoverySource token.TokenSource
 		repl                string
-		replSource          tokenStore.TokenSource
+		replSource          token.TokenSource
 		registration        string
-		registrationSource  tokenStore.TokenSource
+		registrationSource  token.TokenSource
 	}
 
 	resetTokens := func(init tokens) {
@@ -6538,7 +6594,7 @@ func TestAgent_Token(t *testing.T) {
 			url:       "acl_token",
 			body:      body("U"),
 			code:      http.StatusOK,
-			raw:       tokens{user: "U", userSource: tokenStore.TokenSourceAPI},
+			raw:       tokens{user: "U", userSource: token.TokenSourceAPI},
 			effective: tokens{user: "U", agent: "U"},
 		},
 		{
@@ -6547,7 +6603,7 @@ func TestAgent_Token(t *testing.T) {
 			url:       "default",
 			body:      body("U"),
 			code:      http.StatusOK,
-			raw:       tokens{user: "U", userSource: tokenStore.TokenSourceAPI},
+			raw:       tokens{user: "U", userSource: token.TokenSourceAPI},
 			effective: tokens{user: "U", agent: "U"},
 		},
 		{
@@ -6557,7 +6613,7 @@ func TestAgent_Token(t *testing.T) {
 			body:      body("A"),
 			code:      http.StatusOK,
 			init:      tokens{user: "U", agent: "U"},
-			raw:       tokens{user: "U", agent: "A", agentSource: tokenStore.TokenSourceAPI},
+			raw:       tokens{user: "U", agent: "A", agentSource: token.TokenSourceAPI},
 			effective: tokens{user: "U", agent: "A"},
 		},
 		{
@@ -6567,7 +6623,7 @@ func TestAgent_Token(t *testing.T) {
 			body:      body("A"),
 			code:      http.StatusOK,
 			init:      tokens{user: "U", agent: "U"},
-			raw:       tokens{user: "U", agent: "A", agentSource: tokenStore.TokenSourceAPI},
+			raw:       tokens{user: "U", agent: "A", agentSource: token.TokenSourceAPI},
 			effective: tokens{user: "U", agent: "A"},
 		},
 		{
@@ -6576,7 +6632,7 @@ func TestAgent_Token(t *testing.T) {
 			url:       "acl_agent_master_token",
 			body:      body("M"),
 			code:      http.StatusOK,
-			raw:       tokens{agentRecovery: "M", agentRecoverySource: tokenStore.TokenSourceAPI},
+			raw:       tokens{agentRecovery: "M", agentRecoverySource: token.TokenSourceAPI},
 			effective: tokens{agentRecovery: "M"},
 		},
 		{
@@ -6585,7 +6641,7 @@ func TestAgent_Token(t *testing.T) {
 			url:       "agent_master",
 			body:      body("M"),
 			code:      http.StatusOK,
-			raw:       tokens{agentRecovery: "M", agentRecoverySource: tokenStore.TokenSourceAPI},
+			raw:       tokens{agentRecovery: "M", agentRecoverySource: token.TokenSourceAPI},
 			effective: tokens{agentRecovery: "M"},
 		},
 		{
@@ -6594,8 +6650,8 @@ func TestAgent_Token(t *testing.T) {
 			url:       "agent_recovery",
 			body:      body("R"),
 			code:      http.StatusOK,
-			raw:       tokens{agentRecovery: "R", agentRecoverySource: tokenStore.TokenSourceAPI},
-			effective: tokens{agentRecovery: "R", agentRecoverySource: tokenStore.TokenSourceAPI},
+			raw:       tokens{agentRecovery: "R", agentRecoverySource: token.TokenSourceAPI},
+			effective: tokens{agentRecovery: "R", agentRecoverySource: token.TokenSourceAPI},
 		},
 		{
 			name:      "set repl legacy",
@@ -6603,7 +6659,7 @@ func TestAgent_Token(t *testing.T) {
 			url:       "acl_replication_token",
 			body:      body("R"),
 			code:      http.StatusOK,
-			raw:       tokens{repl: "R", replSource: tokenStore.TokenSourceAPI},
+			raw:       tokens{repl: "R", replSource: token.TokenSourceAPI},
 			effective: tokens{repl: "R"},
 		},
 		{
@@ -6612,7 +6668,7 @@ func TestAgent_Token(t *testing.T) {
 			url:       "replication",
 			body:      body("R"),
 			code:      http.StatusOK,
-			raw:       tokens{repl: "R", replSource: tokenStore.TokenSourceAPI},
+			raw:       tokens{repl: "R", replSource: token.TokenSourceAPI},
 			effective: tokens{repl: "R"},
 		},
 		{
@@ -6621,7 +6677,7 @@ func TestAgent_Token(t *testing.T) {
 			url:       "config_file_service_registration",
 			body:      body("G"),
 			code:      http.StatusOK,
-			raw:       tokens{registration: "G", registrationSource: tokenStore.TokenSourceAPI},
+			raw:       tokens{registration: "G", registrationSource: token.TokenSourceAPI},
 			effective: tokens{registration: "G"},
 		},
 		{
@@ -6631,7 +6687,7 @@ func TestAgent_Token(t *testing.T) {
 			body:   body(""),
 			code:   http.StatusOK,
 			init:   tokens{user: "U"},
-			raw:    tokens{userSource: tokenStore.TokenSourceAPI},
+			raw:    tokens{userSource: token.TokenSourceAPI},
 		},
 		{
 			name:   "clear default",
@@ -6640,7 +6696,7 @@ func TestAgent_Token(t *testing.T) {
 			body:   body(""),
 			code:   http.StatusOK,
 			init:   tokens{user: "U"},
-			raw:    tokens{userSource: tokenStore.TokenSourceAPI},
+			raw:    tokens{userSource: token.TokenSourceAPI},
 		},
 		{
 			name:   "clear agent legacy",
@@ -6649,7 +6705,7 @@ func TestAgent_Token(t *testing.T) {
 			body:   body(""),
 			code:   http.StatusOK,
 			init:   tokens{agent: "A"},
-			raw:    tokens{agentSource: tokenStore.TokenSourceAPI},
+			raw:    tokens{agentSource: token.TokenSourceAPI},
 		},
 		{
 			name:   "clear agent",
@@ -6658,7 +6714,7 @@ func TestAgent_Token(t *testing.T) {
 			body:   body(""),
 			code:   http.StatusOK,
 			init:   tokens{agent: "A"},
-			raw:    tokens{agentSource: tokenStore.TokenSourceAPI},
+			raw:    tokens{agentSource: token.TokenSourceAPI},
 		},
 		{
 			name:   "clear master legacy",
@@ -6667,7 +6723,7 @@ func TestAgent_Token(t *testing.T) {
 			body:   body(""),
 			code:   http.StatusOK,
 			init:   tokens{agentRecovery: "M"},
-			raw:    tokens{agentRecoverySource: tokenStore.TokenSourceAPI},
+			raw:    tokens{agentRecoverySource: token.TokenSourceAPI},
 		},
 		{
 			name:   "clear master",
@@ -6676,7 +6732,7 @@ func TestAgent_Token(t *testing.T) {
 			body:   body(""),
 			code:   http.StatusOK,
 			init:   tokens{agentRecovery: "M"},
-			raw:    tokens{agentRecoverySource: tokenStore.TokenSourceAPI},
+			raw:    tokens{agentRecoverySource: token.TokenSourceAPI},
 		},
 		{
 			name:   "clear recovery",
@@ -6685,7 +6741,7 @@ func TestAgent_Token(t *testing.T) {
 			body:   body(""),
 			code:   http.StatusOK,
 			init:   tokens{agentRecovery: "R"},
-			raw:    tokens{agentRecoverySource: tokenStore.TokenSourceAPI},
+			raw:    tokens{agentRecoverySource: token.TokenSourceAPI},
 		},
 		{
 			name:   "clear repl legacy",
@@ -6694,7 +6750,7 @@ func TestAgent_Token(t *testing.T) {
 			body:   body(""),
 			code:   http.StatusOK,
 			init:   tokens{repl: "R"},
-			raw:    tokens{replSource: tokenStore.TokenSourceAPI},
+			raw:    tokens{replSource: token.TokenSourceAPI},
 		},
 		{
 			name:   "clear repl",
@@ -6703,7 +6759,7 @@ func TestAgent_Token(t *testing.T) {
 			body:   body(""),
 			code:   http.StatusOK,
 			init:   tokens{repl: "R"},
-			raw:    tokens{replSource: tokenStore.TokenSourceAPI},
+			raw:    tokens{replSource: token.TokenSourceAPI},
 		},
 		{
 			name:   "clear registration",
@@ -6712,7 +6768,7 @@ func TestAgent_Token(t *testing.T) {
 			body:   body(""),
 			code:   http.StatusOK,
 			init:   tokens{registration: "G"},
-			raw:    tokens{registrationSource: tokenStore.TokenSourceAPI},
+			raw:    tokens{registrationSource: token.TokenSourceAPI},
 		},
 	}
 	for _, tt := range tests {
@@ -6823,6 +6879,10 @@ func TestAgentConnectCARoots_list(t *testing.T) {
 	for _, r := range value.Roots {
 		assert.Equal(t, "", r.SigningCert)
 		assert.Equal(t, "", r.SigningKey)
+		assert.False(t, r.NotBefore.IsZero())
+		assert.False(t, r.NotAfter.IsZero())
+		assert.True(t, r.NotAfter.After(r.NotBefore))
+		assert.True(t, r.NotAfter.After(time.Now()))
 	}
 
 	assert.Equal(t, "MISS", resp.Header().Get("X-Cache"))
@@ -6874,6 +6934,90 @@ func TestAgentConnectCARoots_list(t *testing.T) {
 	}
 }
 
+// TestAgentConnectCARoots_cacheDisabled verifies that when an operator sets
+// http_config { use_cache = false }, GET /v1/agent/connect/ca/roots bypasses
+// the agent cache entirely. Each request with a unique token must produce no
+// X-Cache header, proving the cache path was never entered and the token-based
+// X-Cache header, proving the cache path was never entered.
+func TestAgentConnectCARoots_cacheDisabled(t *testing.T) {
+	if testing.Short() {
+		t.Skip("too slow for testing.Short")
+	}
+
+	t.Parallel()
+
+	a := NewTestAgent(t, `
+		peering { enabled = false }
+		http_config { use_cache = false }
+	`)
+	defer a.Shutdown()
+	testrpc.WaitForTestAgent(t, a.RPC, "dc1")
+
+	for i := 0; i < 5; i++ {
+		req, _ := http.NewRequest("GET",
+			fmt.Sprintf("/v1/agent/connect/ca/roots?token=unique-%d", i), nil)
+		resp := httptest.NewRecorder()
+		a.srv.h.ServeHTTP(resp, req)
+		require.Equal(t, http.StatusOK, resp.Code)
+		// No X-Cache header must appear — the cache must not be touched at all.
+		assert.Empty(t, resp.Header().Get("X-Cache"),
+			"expected no cache interaction when use_cache=false (token=%d)", i)
+	}
+}
+
+// TestAgentConnectAuthorize_cacheDisabled verifies that when an operator sets
+// http_config { use_cache = false }, POST /v1/agent/connect/authorize bypasses
+// the agent cache entirely. Each request with a unique token must produce no
+// X-Cache header, proving the token-based cache-key fanout attack
+// X-Cache header, proving the cache path was never entered.
+func TestAgentConnectAuthorize_cacheDisabled(t *testing.T) {
+	if testing.Short() {
+		t.Skip("too slow for testing.Short")
+	}
+
+	t.Parallel()
+
+	a := NewTestAgent(t, `http_config { use_cache = false }`)
+	defer a.Shutdown()
+	testrpc.WaitForTestAgent(t, a.RPC, "dc1")
+
+	target := "db"
+
+	// Create an intention so the authorize endpoint returns 200 rather than an
+	// error, letting us inspect response headers cleanly.
+	var ixnId string
+	{
+		ixnReq := structs.IntentionRequest{
+			Datacenter: "dc1",
+			Op:         structs.IntentionOpCreate,
+			Intention:  structs.TestIntention(t),
+		}
+		ixnReq.Intention.SourceNS = structs.IntentionDefaultNamespace
+		ixnReq.Intention.SourceName = "web"
+		ixnReq.Intention.DestinationNS = structs.IntentionDefaultNamespace
+		ixnReq.Intention.DestinationName = target
+		ixnReq.Intention.Action = structs.IntentionActionAllow
+		require.Nil(t, a.RPC(context.Background(), "Intention.Apply", &ixnReq, &ixnId))
+	}
+
+	args := &structs.ConnectAuthorizeRequest{
+		Target:        target,
+		ClientCertURI: connect.TestSpiffeIDService(t, "web").URI().String(),
+	}
+
+	for i := 0; i < 5; i++ {
+		req, _ := http.NewRequest("POST",
+			fmt.Sprintf("/v1/agent/connect/authorize?token=unique-%d", i),
+			jsonReader(args))
+		resp := httptest.NewRecorder()
+		a.srv.h.ServeHTTP(resp, req)
+		require.Equal(t, http.StatusOK, resp.Code)
+		// No X-Cache header must appear — the cache must not be touched at all.
+		assert.Empty(t, resp.Header().Get("X-Cache"),
+			"expected no cache interaction when use_cache=false (token=%d)", i)
+	}
+}
+
 func TestAgentConnectCALeafCert_aclDefaultDeny(t *testing.T) {
 	if testing.Short() {
 		t.Skip("too slow for testing.Short")
@@ -6906,10 +7050,26 @@ func TestAgentConnectCALeafCert_aclDefaultDeny(t *testing.T) {
 		require.Equal(t, 200, resp.Code, "body: %s", resp.Body.String())
 	}
 
-	req, _ := http.NewRequest("GET", "/v1/agent/connect/ca/leaf/test", nil)
-	resp := httptest.NewRecorder()
-	a.srv.h.ServeHTTP(resp, req)
-	require.Equal(t, http.StatusForbidden, resp.Code)
+	leafURL := "/v1/agent/connect/ca/leaf/test"
+	seedReq, _ := http.NewRequest("GET", leafURL, nil)
+	seedReq.Header.Add("X-Consul-Token", "root")
+	seedResp := httptest.NewRecorder()
+	a.srv.h.ServeHTTP(seedResp, seedReq)
+	require.Equal(t, http.StatusOK, seedResp.Code, "body: %s", seedResp.Body.String())
+	require.Equal(t, "MISS", seedResp.Header().Get("X-Cache"))
+
+	for _, token := range []string{"", "bogus"} {
+		t.Run("unauthorized token="+token, func(t *testing.T) {
+			req, _ := http.NewRequest("GET", leafURL, nil)
+			if token != "" {
+				req.Header.Add("X-Consul-Token", token)
+			}
+			resp := httptest.NewRecorder()
+			a.srv.h.ServeHTTP(resp, req)
+			require.Equal(t, http.StatusForbidden, resp.Code)
+			require.Empty(t, resp.Header().Get("X-Cache"))
+		})
+	}
 }
 
 func TestAgentConnectCALeafCert_aclServiceWrite(t *testing.T) {
@@ -7486,7 +7646,7 @@ func TestAgentConnectCALeafCert_Vault_doesNotChurnLeafCertsAtIdle(t *testing.T) 
 			resp := httptest.NewRecorder()
 			a.srv.h.ServeHTTP(resp, req)
 			if resp.Code != http.StatusOK {
-				ch <- fmt.Errorf(resp.Body.String())
+				ch <- errors.New(resp.Body.String())
 				return
 			}
 
@@ -7622,7 +7782,7 @@ func TestAgentConnectCALeafCert_secondaryDC_good(t *testing.T) {
 			resp := httptest.NewRecorder()
 			a2.srv.h.ServeHTTP(resp, req)
 			if resp.Code != http.StatusOK {
-				ch <- fmt.Errorf(resp.Body.String())
+				ch <- errors.New(resp.Body.String())
 				return
 			}
 
@@ -8438,4 +8598,159 @@ func TestAgent_Self_Reload(t *testing.T) {
 	require.Equal(t, "debug", val.DebugConfig["Logging"].(map[string]interface{})["LogLevel"])
 	require.Equal(t, float64(200), val.DebugConfig["RaftSnapshotThreshold"].(float64))
 
+}
+
+func TestAgent_RegisterService_MultiPort(t *testing.T) {
+	if testing.Short() {
+		t.Skip("too slow for testing.Short")
+	}
+
+	t.Helper()
+
+	a := NewTestAgent(t, "")
+	defer a.Shutdown()
+	testrpc.WaitForTestAgent(t, a.RPC, "dc1")
+
+	type testCase struct {
+		args               *structs.ServiceDefinition
+		expectedStatusCode int
+	}
+
+	testCases := map[string]testCase{
+		"valid multi-port service registration": {
+			args: &structs.ServiceDefinition{
+				ID:   "test-id",
+				Name: "test",
+				Ports: structs.ServicePorts{
+					{
+						Name:    "http",
+						Port:    8080,
+						Default: true,
+					},
+					{
+						Name: "metrics",
+						Port: 9090,
+					},
+				},
+			},
+			expectedStatusCode: http.StatusOK,
+		},
+		"invalid multi-port service registration - missing default": {
+			args: &structs.ServiceDefinition{
+				ID:   "test-id",
+				Name: "test",
+				Ports: structs.ServicePorts{
+					{
+						Name: "http",
+						Port: 8080,
+					},
+					{
+						Name: "metrics",
+						Port: 9090,
+					},
+				},
+			},
+			expectedStatusCode: http.StatusBadRequest,
+		},
+		"invalid multi-port service registration - missing name": {
+			args: &structs.ServiceDefinition{
+				ID:   "test-id",
+				Name: "test",
+				Ports: structs.ServicePorts{
+					{
+						Port:    8080,
+						Default: true,
+					},
+					{
+						Name: "metrics",
+						Port: 9090,
+					},
+				},
+			},
+			expectedStatusCode: http.StatusBadRequest,
+		},
+		"invalid multi-port service registration - missing port": {
+			args: &structs.ServiceDefinition{
+				ID:   "test-id",
+				Name: "test",
+				Ports: structs.ServicePorts{
+					{
+						Name:    "http",
+						Default: true,
+					},
+					{
+						Name: "metrics",
+						Port: 9090,
+					},
+				},
+			},
+			expectedStatusCode: http.StatusBadRequest,
+		},
+		"invalid multi-port service registration - duplicate name": {
+			args: &structs.ServiceDefinition{
+				ID:   "test-id",
+				Name: "test",
+				Ports: structs.ServicePorts{
+					{
+						Name:    "http",
+						Port:    8080,
+						Default: true,
+					},
+					{
+						Name: "http",
+						Port: 9090,
+					},
+				},
+			},
+			expectedStatusCode: http.StatusBadRequest,
+		},
+	}
+
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			req, _ := http.NewRequest("PUT", "/v1/agent/service/register", jsonReader(tc.args))
+			req.Header.Add("X-Consul-Token", "abc123")
+			resp := httptest.NewRecorder()
+			a.srv.h.ServeHTTP(resp, req)
+
+			if tc.expectedStatusCode != resp.Code {
+				t.Fatalf("expected %d but got %v", tc.expectedStatusCode, resp.Code)
+			}
+
+			if tc.expectedStatusCode != http.StatusOK {
+				// we're done
+				return
+			}
+
+			defer deregisterService(t, a, tc.args.ID)
+
+			// Ensure the service
+			sid := structs.NewServiceID(tc.args.ID, nil)
+			svc := a.State.Service(sid)
+			if svc == nil {
+				t.Fatalf("missing service %s", tc.args.Name)
+			}
+
+			if len(svc.Ports) != len(tc.args.Ports) {
+				t.Fatalf("Expected %d ports, got: %v", len(tc.args.Ports), len(svc.Ports))
+			}
+
+			if !svc.Ports.IsSame(tc.args.Ports) {
+				t.Fatalf("Ports do not match. Expected: %v, got: %v", tc.args.Ports, svc.Ports)
+			}
+		})
+	}
+}
+
+func deregisterService(t *testing.T, a *TestAgent, serviceID string) {
+	t.Helper()
+	req := httptest.NewRequest("PUT", "/v1/agent/service/deregister/"+serviceID, nil)
+	req.Header.Add("X-Consul-Token", "abc123")
+	resp := httptest.NewRecorder()
+	a.srv.h.ServeHTTP(resp, req)
+	require.Equal(t, http.StatusOK, resp.Code)
+
+	// Ensure the service is gone
+	sid := structs.NewServiceID(serviceID, nil)
+	require.Nil(t, a.State.Service(sid))
 }

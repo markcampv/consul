@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package proxycfgglue
@@ -59,7 +59,7 @@ func (h *serverHealthBlocking) Notify(ctx context.Context, args *structs.Service
 	if args.ServiceName == "" {
 		return fmt.Errorf("Must provide service name")
 	}
-	if args.EnterpriseMeta.PartitionOrDefault() == acl.WildcardName {
+	if args.PartitionOrDefault() == acl.WildcardName {
 		return fmt.Errorf("Wildcards are not allowed in the partition field")
 	}
 
@@ -79,7 +79,7 @@ func (h *serverHealthBlocking) Notify(ctx context.Context, args *structs.Service
 		return err
 	}
 
-	var hadResults bool = false
+	var hadResults = false
 	return watch.ServerLocalNotify(ctx, correlationID, h.deps.GetStore,
 		func(ws memdb.WatchSet, store Store) (uint64, *structs.IndexedCheckServiceNodes, error) {
 			// This is necessary so that service export changes are eventually picked up, since

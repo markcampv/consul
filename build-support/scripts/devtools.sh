@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) HashiCorp, Inc.
+# Copyright IBM Corp. 2024, 2026
 # SPDX-License-Identifier: BUSL-1.1
 
 
@@ -89,9 +89,9 @@ function proto_tools_install {
 
     install_versioned_tool \
         'mockery' \
-        'github.com/vektra/mockery/v2' \
+        'github.com/vektra/mockery/v3' \
         "${mockery_version}" \
-        'github.com/vektra/mockery/v2'
+        'github.com/vektra/mockery/v3'
 
     install_versioned_tool \
        'buf' \
@@ -164,9 +164,9 @@ function lint_install {
 
     install_versioned_tool \
         'golangci-lint' \
-        'github.com/golangci/golangci-lint' \
+        'github.com/golangci/golangci-lint/v2' \
         "${golangci_lint_version}" \
-        'github.com/golangci/golangci-lint/cmd/golangci-lint'
+        'github.com/golangci/golangci-lint/v2/cmd/golangci-lint'
 
     install_versioned_tool \
         'gci' \

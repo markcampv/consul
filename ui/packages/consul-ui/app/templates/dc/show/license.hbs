@@ -4,7 +4,7 @@
 }}
 
 <Route
-  @name={{routeName}}
+  @name={{this.routeName}}
 as |route|>
   <DataLoader
     @src={{
@@ -14,20 +14,16 @@ as |route|>
         nspace=route.params.nspace
         dc=route.params.dc
       )
-    }}
-  as |loader|>
+    }}>
 
-{{#let
-  loader.data
-as |item|}}
-    <BlockSlot @name="error">
+    <:error as |loader|>
       <ErrorState
         @error={{loader.error}}
         @login={{route.model.app.login.open}}
       />
-    </BlockSlot>
+    </:error>
 
-    <BlockSlot @name="disconnected" as |after|>
+    <:disconnected as |after loader|>
       {{#if (eq loader.error.status "404")}}
         <Hds::Toast @color='warning'
           {{notification
@@ -53,9 +49,12 @@ as |item|}}
           <T.Description>An error was returned whilst loading this data, refresh to try again.</T.Description>
         </Hds::Toast>
       {{/if}}
-    </BlockSlot>
+    </:disconnected>
 
-    <BlockSlot @name="loaded">
+    <:loaded as |loader|>
+{{#let
+  loader.data
+as |item|}}
       <div class="tab-section">
         <section
           class={{class-map
@@ -110,12 +109,17 @@ as |item|}}
           </dl>
 
           <aside>
+            {{! nested inside <aside>, this <header> is not a top-level banner
+              landmark (computes to role=generic per the HTML-AAM spec), so it
+              doesn't need a unique label; the static rule can't see the
+              surrounding context. }}
+            {{!-- template-lint-disable no-duplicate-landmark-elements --}}
             <header>
               <h3>
                 {{compute (fn route.t 'documentation.title')}}
               </h3>
             </header>
-            <div class="flex gap-1.5 flex-col">
+            <div class="license-learn-more__links">
               <Hds::Link::Standalone
                 @text={{compute (fn route.t 'documentation.links.license-expiration.text')}}
                 @href='{{concat (env 'CONSUL_DOCS_URL') (compute (fn route.t 'documentation.links.license-expiration.link'))}}'
@@ -130,7 +134,7 @@ as |item|}}
               />
               <Hds::Link::Standalone
                 @text={{compute (fn route.t 'documentation.links.applying-new-license.text')}}
-                @href='{{concat (env 'CONSUL_DOCS_URL') (compute (fn route.t 'documentation.links.applying-new-license.link'))}}'
+                @href='{{concat (env 'CONSUL_HOME_URL') (compute (fn route.t 'documentation.links.applying-new-license.link'))}}'
                 @icon='docs-link'
                 @iconPosition='trailing'
               />
@@ -139,8 +143,8 @@ as |item|}}
 
         </section>
       </div>
-    </BlockSlot>
 {{/let}}
+    </:loaded>
   </DataLoader>
 </Route>
 

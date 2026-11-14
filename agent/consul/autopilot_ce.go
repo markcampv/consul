@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 //go:build !consulent
@@ -14,6 +14,6 @@ func (s *Server) autopilotPromoter() autopilot.Promoter {
 	return autopilot.DefaultPromoter()
 }
 
-func (_ *Server) autopilotServerExt(_ *metadata.Server) interface{} {
+func (*Server) autopilotServerExt(_ *metadata.Server) interface{} {
 	return nil
 }

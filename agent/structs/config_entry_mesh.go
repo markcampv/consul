@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package structs
@@ -6,6 +6,7 @@ package structs
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/hashicorp/consul/acl"
@@ -69,6 +70,10 @@ type MeshDirectionalTLSConfig struct {
 	// Define a subset of cipher suites to restrict
 	// Only applicable to connections negotiated via TLS 1.2 or earlier
 	CipherSuites []types.TLSCipherSuite `json:",omitempty" alias:"cipher_suites"`
+
+	// ECDHCurves specifies the list of ECDH/KEM curves to offer during the TLS
+	// handshake. Values must match Envoy TlsParameters.ecdh_curves identifiers.
+	ECDHCurves []string `json:",omitempty" alias:"ecdh_curves"`
 }
 
 type MeshHTTPConfig struct {
@@ -362,11 +367,107 @@ func (r *RequestNormalizationMeshConfig) GetHeadersWithUnderscoresAction() Heade
 	return r.HeadersWithUnderscoresAction
 }
 
+// validEnvoyECDHCurves defines the supported ECDH/KEM curves for TLS 1.3.
+// NOTE: If this map is updated, ensure the corresponding validCurves list
+// and Kubebuilder enum markers in github.com/hashicorp/consul-k8s/control-plane/api/v1alpha1/mesh_types.go
+// are also updated.
+var validEnvoyECDHCurves = map[string]struct{}{
+	"X25519MLKEM768": {},
+	"X25519":         {},
+	"P-256":          {},
+	"P-384":          {},
+	"P-521":          {},
+}
+
+func sortedEnvoyECDHCurves() []string {
+	return types.SortedEnvoyECDHCurves()
+}
+
 func validateMeshDirectionalTLSConfig(cfg *MeshDirectionalTLSConfig) error {
 	if cfg == nil {
 		return nil
 	}
-	return validateTLSConfig(cfg.TLSMinVersion, cfg.TLSMaxVersion, cfg.CipherSuites)
+	if err := validateTLSConfig(cfg.TLSMinVersion, cfg.TLSMaxVersion, cfg.CipherSuites); err != nil {
+		return err
+	}
+	return validateECDHCurves(cfg.TLSMinVersion, cfg.ECDHCurves)
+}
+
+func validateECDHCurves(minVersion types.TLSVersion, curves []string) error {
+	if len(curves) == 0 {
+		return nil
+	}
+	if err := types.ValidateTLSVersionECDHCurvesCompat(minVersion); err != nil {
+		return err
+	}
+	if err := types.ValidateEnvoyECDHCurves(curves); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// meshTLSMinVersionForMessage renders a TLS minimum version for user-facing messages.
+func meshTLSMinVersionForMessage(v types.TLSVersion) string {
+	if v == types.TLSVersionUnspecified {
+		return "unspecified"
+	}
+	return string(v)
+}
+
+// ecdhCurvesLackP256ForTLS12 reports whether cfg configures curves that cannot
+// complete a TLS 1.2 handshake. Consul service mesh leaf certificates always
+// use ECDSA P-256 keys, regardless of the CA key type. In TLS 1.2 a peer only
+// accepts an ECDSA certificate whose curve it offered, so the handshake fails
+// with WRONG_CURVE unless P-256 is in the list.
+func ecdhCurvesLackP256ForTLS12(cfg *MeshDirectionalTLSConfig) bool {
+	if cfg == nil || len(cfg.ECDHCurves) == 0 || cfg.TLSMinVersion == types.TLSv1_3 {
+		return false
+	}
+	return !slices.Contains(cfg.ECDHCurves, string(types.CurveP256))
+}
+
+// Warnings implements WarningConfigEntry.
+func (e *MeshConfigEntry) Warnings() []string {
+	if e == nil || e.TLS == nil {
+		return nil
+	}
+	var warnings []string
+	for _, d := range []struct {
+		name string
+		cfg  *MeshDirectionalTLSConfig
+	}{{"Incoming", e.TLS.Incoming}, {"Outgoing", e.TLS.Outgoing}} {
+		if !ecdhCurvesLackP256ForTLS12(d.cfg) {
+			continue
+		}
+		warnings = append(warnings, fmt.Sprintf("mesh TLS.%s.ECDHCurves does not include %q while TLS 1.2 can be negotiated (TLSMinVersion is %s): "+
+			"TLS 1.2 handshakes with Consul service mesh certificates, which use ECDSA P-256 keys, fail with WRONG_CURVE. "+
+			"Add %q to ECDHCurves, or set TLSMinVersion and TLSMaxVersion to %q",
+			d.name, types.CurveP256, meshTLSMinVersionForMessage(d.cfg.TLSMinVersion), types.CurveP256, types.TLSv1_3))
+	}
+	return warnings
+}
+
+// ValidateMeshOutgoingECDHCurvesUpdate rejects a write whose Outgoing curve
+// list cannot complete a TLS 1.2 handshake, when that list is new or differs
+// from the currently stored entry. Upstream connections would fail with
+// WRONG_CURVE. Stored entries with unchanged curves keep working, so updates
+// and controller resyncs do not fail after an upgrade; Incoming lists and
+// unchanged lists are reported through Warnings instead.
+func ValidateMeshOutgoingECDHCurvesUpdate(updated *MeshConfigEntry, current ConfigEntry) error {
+	if updated == nil || updated.TLS == nil || !ecdhCurvesLackP256ForTLS12(updated.TLS.Outgoing) {
+		return nil
+	}
+	// Only an entry that was already stored with the same incompatible
+	// Outgoing curves is exempt, so lowering the TLS minimum is still checked.
+	if stored, ok := current.(*MeshConfigEntry); ok && stored != nil && stored.TLS != nil &&
+		ecdhCurvesLackP256ForTLS12(stored.TLS.Outgoing) &&
+		slices.Equal(stored.TLS.Outgoing.ECDHCurves, updated.TLS.Outgoing.ECDHCurves) {
+		return nil
+	}
+	return fmt.Errorf("error in outgoing TLS configuration: ecdh_curves must include %q when TLS 1.2 can be negotiated (TLSMinVersion is %s): "+
+		"Consul service mesh certificates use ECDSA P-256 keys. Add %q to ECDHCurves, or set TLSMinVersion and TLSMaxVersion to %q",
+		types.CurveP256, meshTLSMinVersionForMessage(updated.TLS.Outgoing.TLSMinVersion), types.CurveP256, types.TLSv1_3)
 }
 
 func validateTLSConfig(

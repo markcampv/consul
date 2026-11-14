@@ -1,10 +1,10 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 export default (collection, clickable, text) => () => {
-  return collection('.consul-auth-method-list [data-test-list-row]', {
+  return collection('.consul-auth-method-list [data-test-tabular-row]', {
     authMethod: clickable('a'),
     name: text('[data-test-auth-method]'),
     displayName: text('[data-test-display-name]'),

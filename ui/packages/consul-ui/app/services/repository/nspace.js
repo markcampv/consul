@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -57,7 +57,7 @@ export default class NspaceService extends RepositoryService {
     if (!this.permissions.can('use nspaces')) {
       return [];
     }
-    return super.findAll(...arguments).catch(() => []);
+    return super.findAll(...arguments);
   }
 
   @dataSource('/:partition/:ns/:dc/namespace/:id')

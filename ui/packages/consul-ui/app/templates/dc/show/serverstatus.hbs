@@ -4,7 +4,7 @@
 }}
 
 <Route
-  @name={{routeName}}
+  @name={{this.routeName}}
 as |route|>
   <DataLoader
     @src={{
@@ -14,20 +14,16 @@ as |route|>
         nspace=route.params.nspace
         dc=route.params.dc
       )
-    }}
-  as |loader|>
+    }}>
 
-{{#let
-  loader.data
-as |item|}}
-    <BlockSlot @name="error">
+    <:error as |loader|>
       <ErrorState
         @error={{loader.error}}
         @login={{route.model.app.login.open}}
       />
-    </BlockSlot>
+    </:error>
 
-    <BlockSlot @name="disconnected" as |after|>
+    <:disconnected as |after loader|>
       {{#if (eq loader.error.status "404")}}
         <Hds::Toast
           @color='warning'
@@ -56,87 +52,80 @@ as |item|}}
           <T.Description>An error was returned whilst loading this data, refresh to try again.</T.Description>
         </Hds::Toast>
       {{/if}}
-    </BlockSlot>
+    </:disconnected>
 
-    <BlockSlot @name="loaded">
+    <:loaded as |loader|>
+{{#let
+  loader.data
+as |item|}}
       <div class="tab-section">
 
-          <section
-            class={{class-map
-              'server-failure-tolerance'
-            }}
+          <div
+            class="server-failure-tolerance"
+            aria-labelledby="server-fault-tolerance-title"
+            role="region"
+            data-test-server-info
           >
-
-            <header>
-              <h2>
+            <header class="server-failure-tolerance__header">
+              <h2 id="server-fault-tolerance-title">
                 {{compute (fn route.t 'tolerance.header')}}
               </h2>
               <Hds::Link::Standalone
-                @icon='docs-link'
+                @icon='arrow-right'
                 @iconPosition='trailing'
                 @text={{compute (fn route.t 'tolerance.link-text')}}
                 @href='{{concat (env 'CONSUL_DOCS_URL') (compute (fn route.t 'tolerance.link'))}}'
+                aria-label="Learn how to improve fault tolerance"
               />
             </header>
 
-            <section
-              class={{class-map
-                (array 'immediate-tolerance')
-              }}
-            >
-              <header>
+            <div class="server-failure-tolerance__cards">
+              <Hds::Card::Container
+                @hasBorder={{true}}
+                @level="base"
+                class="server-failure-tolerance__card"
+                role="group"
+                aria-label="Immediate Fault Tolerance"
+              >
                 <h3>
                   {{compute (fn route.t 'tolerance.immediate.header')}}
                 </h3>
-              </header>
-              <dl
-                class={{class-map
-                  (array 'warning' (and
-                    (eq item.FailureTolerance 0)
-                    (eq item.OptimisticFailureTolerance 0)
-                  ))
-                }}
-              >
-                <dt>
+                <p>
                   {{compute (fn route.t 'tolerance.immediate.body')}}
-                </dt>
-                <dd>
-                  {{item.FailureTolerance}}
-                </dd>
-              </dl>
-            </section>
+                </p>
+                <div class="server-failure-tolerance__value" aria-live="polite">
+                  <Hds::BadgeCount @text={{item.FailureTolerance}} @size="large" @type="filled" @color="neutral" />
+                </div>
+              </Hds::Card::Container>
 
               {{#if (can 'read zones')}}
-            <section
-              class={{class-map
-                (array 'optimistic-tolerance')
-              }}
-            >
-              <header>
+              <Hds::Card::Container
+                @hasBorder={{true}}
+                @level="base"
+                class="server-failure-tolerance__card optimistic-tolerance"
+                role="group"
+                aria-label="Optimistic Fault Tolerance"
+              >
                 <h3>
                   {{compute (fn route.t 'tolerance.optimistic.header')}}
                   <span
-                    {{tooltip 'With > 30 seconds between server failures, Consul can restore the Immediate Fault Tolerance by replacing failed active voters with healthy back-up voters when using redundancy zones.'}}
+                    role="group"
+                    tabindex="-1"
+                    aria-label='With > 30 seconds between server failures, Consul can restore the Immediate Fault Tolerance by replacing failed active voters with healthy back-up voters when using redundancy zones.'
+                    {{hds-tooltip 'With > 30 seconds between server failures, Consul can restore the Immediate Fault Tolerance by replacing failed active voters with healthy back-up voters when using redundancy zones.' options=(detached-tooltip-options)}}
                   >
                   </span>
                 </h3>
-              </header>
-              <dl
-                class={{class-map
-                  (array 'warning' (eq item.OptimisticFailureTolerance 0))
-                }}
-              >
-                <dt>
+                <p>
                   {{compute (fn route.t 'tolerance.optimistic.body')}}
-                </dt>
-                <dd>
-                  {{item.OptimisticFailureTolerance}}
-                </dd>
-              </dl>
-
-            </section>
+                </p>
+                <div class="server-failure-tolerance__value" aria-live="polite">
+                  <Hds::BadgeCount @text={{item.OptimisticFailureTolerance}} @size="large" @type="filled" @color="neutral" />
+                </div>
+              </Hds::Card::Container>
               {{/if}}
-          </section>
+            </div>
+          </div>
 
     {{#if (gt item.RedundancyZones.length 0)}}
           <section
@@ -144,6 +133,9 @@ as |item|}}
               'redundancy-zones'
             }}
           >
+            {{! nested inside <section>, not a top-level banner landmark
+              (role=generic per HTML-AAM), so no unique label is needed. }}
+            {{!-- template-lint-disable no-duplicate-landmark-elements --}}
             <header>
               <h2>
                 {{pluralize (t 'common.consul.redundancyzone')}}
@@ -153,6 +145,9 @@ as |item|}}
       {{#each item.RedundancyZones as |item|}}
         {{#if (gt item.Servers.length 0) }}
               <section>
+                {{! nested inside <section>, not a top-level banner landmark
+                  (role=generic per HTML-AAM), so no unique label needed. }}
+                {{!-- template-lint-disable no-duplicate-landmark-elements --}}
                 <header>
                   <h3>
                     {{item.Name}}
@@ -176,6 +171,9 @@ as |item|}}
 
       {{#if (gt item.Default.Servers.length 0)}}
               <section>
+                {{! nested inside <section>, not a top-level banner landmark
+                  (role=generic per HTML-AAM), so no unique label needed. }}
+                {{!-- template-lint-disable no-duplicate-landmark-elements --}}
                 <header>
                   <h3>
                     {{compute (fn route.t 'unassigned')}}
@@ -190,6 +188,9 @@ as |item|}}
           </section>
     {{else}}
           <section>
+            {{! nested inside <section>, not a top-level banner landmark
+              (role=generic per HTML-AAM), so no unique label is needed. }}
+            {{!-- template-lint-disable no-duplicate-landmark-elements --}}
             <header>
               <h2>
                 {{compute (fn route.t 'servers')}}
@@ -203,6 +204,9 @@ as |item|}}
 
     {{#if (gt item.ReadReplicas.length 0)}}
           <section>
+            {{! nested inside <section>, not a top-level banner landmark
+              (role=generic per HTML-AAM), so no unique label is needed. }}
+            {{!-- template-lint-disable no-duplicate-landmark-elements --}}
             <header>
               <h2>
                 {{pluralize (t 'common.consul.readreplica')}}
@@ -216,8 +220,8 @@ as |item|}}
     {{/if}}
 
       </div>
-    </BlockSlot>
 {{/let}}
+    </:loaded>
   </DataLoader>
 </Route>
 

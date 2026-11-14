@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package health
@@ -75,6 +75,16 @@ func TestClient_ServiceNodes_BackendRouting(t *testing.T) {
 				ServiceName:  "web1",
 				QueryOptions: structs.QueryOptions{UseCache: true},
 				Ingress:      true,
+			},
+			expected: useCache,
+		},
+		{
+			name: "use cache for api-gateway request",
+			req: structs.ServiceSpecificRequest{
+				Datacenter:   "dc1",
+				ServiceName:  "web1",
+				QueryOptions: structs.QueryOptions{UseCache: true},
+				APIGateway:   true,
 			},
 			expected: useCache,
 		},

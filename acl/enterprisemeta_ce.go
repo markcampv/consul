@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 //go:build !consulent
@@ -84,9 +84,9 @@ func (m *EnterpriseMeta) MergeNoWildcard(_ *EnterpriseMeta) {
 	// do nothing
 }
 
-func (_ *EnterpriseMeta) Normalize()          {}
-func (_ *EnterpriseMeta) NormalizePartition() {}
-func (_ *EnterpriseMeta) NormalizeNamespace() {}
+func (*EnterpriseMeta) Normalize()          {}
+func (*EnterpriseMeta) NormalizePartition() {}
+func (*EnterpriseMeta) NormalizeNamespace() {}
 
 func (m *EnterpriseMeta) Matches(_ *EnterpriseMeta) bool {
 	return true
@@ -117,7 +117,7 @@ func NewEnterpriseMetaWithPartition(_, _ string) EnterpriseMeta {
 }
 
 // FillAuthzContext stub
-func (_ *EnterpriseMeta) FillAuthzContext(_ *AuthorizerContext) {}
+func (*EnterpriseMeta) FillAuthzContext(_ *AuthorizerContext) {}
 
 func NormalizeNamespace(_ string) string {
 	return ""

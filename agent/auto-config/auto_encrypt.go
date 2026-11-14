@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package autoconf
@@ -95,6 +95,13 @@ func (ac *AutoConfig) joinHosts() ([]string, error) {
 		host, _, err := net.SplitHostPort(addr)
 		if err != nil {
 			if strings.Contains(err.Error(), "missing port in address") {
+				host = addr
+			} else if strings.Contains(err.Error(), "too many colons in address") {
+				ip := net.ParseIP(addr)
+				if ip == nil {
+					ac.logger.Warn("not a valid ip address", "address", addr, "error", err)
+					continue
+				}
 				host = addr
 			} else {
 				ac.logger.Warn("error splitting host address into IP and port", "address", addr, "error", err)

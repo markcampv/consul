@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package resource_test
@@ -53,9 +53,9 @@ func TestGetDecodedResource(t *testing.T) {
 		require.NotNil(t, got)
 
 		// Clone generated fields over.
-		res.Id.Uid = got.Resource.Id.Uid
-		res.Version = got.Resource.Version
-		res.Generation = got.Resource.Generation
+		res.Id.Uid = got.Id.Uid
+		res.Version = got.Version
+		res.Generation = got.Generation
 
 		// Clone defaulted fields over
 		data.Genre = pbdemo.Genre_GENRE_DISCO

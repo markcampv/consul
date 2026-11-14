@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package structs
@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/miekg/dns"
 	"github.com/mitchellh/hashstructure"
-	"github.com/mitchellh/mapstructure"
 
 	"github.com/hashicorp/consul-net-rpc/go-msgpack/codec"
 	"github.com/hashicorp/go-multierror"
@@ -45,7 +45,9 @@ const (
 	TCPRoute              string = "tcp-route"
 	// TODO: decide if we want to highlight 'ip' keyword in the name of RateLimitIPConfig
 	RateLimitIPConfig string = "control-plane-request-limit"
+	RateLimit         string = "rate-limit"
 	JWTProvider       string = "jwt-provider"
+	InferenceGateway  string = "inference-gateway"
 
 	ProxyConfigGlobal string = "global"
 	MeshConfigMesh    string = "mesh"
@@ -74,7 +76,9 @@ var AllConfigEntryKinds = []string{
 	FileSystemCertificate,
 	InlineCertificate,
 	RateLimitIPConfig,
+	RateLimit,
 	JWTProvider,
+	InferenceGateway,
 }
 
 // ConfigEntry is the interface for centralized configuration stored in Raft.
@@ -183,6 +187,9 @@ type ServiceConfigEntry struct {
 	Hash               uint64            `json:",omitempty" hash:"ignore"`
 	acl.EnterpriseMeta `hcl:",squash" mapstructure:",squash"`
 	RaftIndex          `hash:"ignore"`
+	// MaxRequestHeadersKB configures the maximum size in kilobytes for request headers
+	// sent from downstream clients to upstream services. If not set, uses Envoy's default.
+	MaxRequestHeadersKB *uint32 `json:",omitempty"`
 }
 
 func (e *ServiceConfigEntry) SetHash(h uint64) {
@@ -296,7 +303,7 @@ func (e *ServiceConfigEntry) Validate() error {
 	}
 
 	if e.Destination != nil {
-		if e.Destination.Addresses == nil || len(e.Destination.Addresses) == 0 {
+		if len(e.Destination.Addresses) == 0 {
 			validationErr = multierror.Append(validationErr, errors.New("Destination must contain at least one valid address"))
 		}
 
@@ -358,7 +365,20 @@ func (e *ServiceConfigEntry) CanRead(authz acl.Authorizer) error {
 func (e *ServiceConfigEntry) CanWrite(authz acl.Authorizer) error {
 	var authzContext acl.AuthorizerContext
 	e.FillAuthzContext(&authzContext)
-	return authz.ToAllowAuthorizer().ServiceWriteAllowed(e.Name, &authzContext)
+	if err := authz.ToAllowAuthorizer().ServiceWriteAllowed(e.Name, &authzContext); err != nil {
+		return err
+	}
+	// Code-executing extensions (builtin/lua, builtin/wasm) and upstream escape-hatch
+	// overrides (envoy_listener_json, envoy_cluster_json) run or embed arbitrary Envoy
+	// JSON as the sidecar process user on every proxied request. Both require mesh:write
+	// in addition to service:write so the capability is independently auditable and
+	// cannot be reached via the standard application-team delegation pattern alone.
+	if e.EnvoyExtensions.HasCodeExecutingExtension() || e.UpstreamConfig.HasEscapeHatchOverride() {
+		if err := authz.ToAllowAuthorizer().MeshWriteAllowed(&authzContext); err != nil {
+			return fmt.Errorf("mesh:write required to attach code-executing EnvoyExtensions or upstream escape-hatch overrides (envoy_listener_json, envoy_cluster_json): %w", err)
+		}
+	}
+	return nil
 }
 
 func (e *ServiceConfigEntry) GetRaftIndex() *RaftIndex {
@@ -407,6 +427,26 @@ func (c *UpstreamConfiguration) Clone() *UpstreamConfiguration {
 	}
 
 	return &c2
+}
+
+// HasEscapeHatchOverride reports whether any upstream in the configuration
+// carries an envoy_listener_json or envoy_cluster_json escape-hatch override.
+// These fields embed arbitrary Envoy JSON that is delivered verbatim to the
+// sidecar, can introduce code-executing HTTP filters, and therefore require
+// mesh:write in addition to service:write.
+func (c *UpstreamConfiguration) HasEscapeHatchOverride() bool {
+	if c == nil {
+		return false
+	}
+	if c.Defaults != nil && (c.Defaults.EnvoyListenerJSON != "" || c.Defaults.EnvoyClusterJSON != "") {
+		return true
+	}
+	for _, o := range c.Overrides {
+		if o != nil && (o.EnvoyListenerJSON != "" || o.EnvoyClusterJSON != "") {
+			return true
+		}
+	}
+	return false
 }
 
 // DestinationConfig represents a virtual service, i.e. one that is external to Consul
@@ -849,6 +889,8 @@ func MakeConfigEntry(kind, name string) (ConfigEntry, error) {
 		return &TCPRouteConfigEntry{Name: name}, nil
 	case JWTProvider:
 		return &JWTProviderConfigEntry{Name: name}, nil
+	case InferenceGateway:
+		return &InferenceGatewayConfigEntry{Name: name}, nil
 	default:
 		return nil, fmt.Errorf("invalid config entry kind: %s", kind)
 	}
@@ -965,7 +1007,7 @@ func (r *ServiceConfigRequest) CacheInfo() cache.RequestInfo {
 		UpstreamServiceNames: r.UpstreamServiceNames,
 		ProxyMode:            r.Mode,
 		MeshGatewayConfig:    r.MeshGateway,
-		Filter:               r.QueryOptions.Filter,
+		Filter:               r.Filter,
 	}, nil)
 	if err == nil {
 		// If there is an error, we don't set the key. A blank key forces
@@ -1083,8 +1125,8 @@ func (cfg *UpstreamConfig) normalize(named bool, entMeta *acl.EnterpriseMeta) er
 	if named {
 		// If the upstream namespace is omitted it inherits that of the enclosing
 		// config entry.
-		cfg.EnterpriseMeta.MergeNoWildcard(entMeta)
-		cfg.EnterpriseMeta.Normalize()
+		cfg.MergeNoWildcard(entMeta)
+		cfg.Normalize()
 	}
 
 	cfg.Protocol = strings.ToLower(cfg.Protocol)
@@ -1109,17 +1151,17 @@ func (cfg UpstreamConfig) validate(named bool) error {
 		if cfg.Name == WildcardSpecifier {
 			return fmt.Errorf("Wildcard name is not supported")
 		}
-		if cfg.EnterpriseMeta.NamespaceOrDefault() == WildcardSpecifier {
+		if cfg.NamespaceOrDefault() == WildcardSpecifier {
 			return fmt.Errorf("Wildcard namespace is not supported")
 		}
 	} else {
 		if cfg.Name != "" {
 			return fmt.Errorf("Name must be empty")
 		}
-		if cfg.EnterpriseMeta.NamespaceOrEmpty() != "" {
+		if cfg.NamespaceOrEmpty() != "" {
 			return fmt.Errorf("Namespace must be empty")
 		}
-		if cfg.EnterpriseMeta.PartitionOrEmpty() != "" {
+		if cfg.PartitionOrEmpty() != "" {
 			return fmt.Errorf("Partition must be empty")
 		}
 	}
@@ -1204,6 +1246,19 @@ type PassiveHealthCheck struct {
 	// This setting can be used to disable ejection or to ramp it up slowly. Defaults to 100.
 	EnforcingConsecutive5xx *uint32 `json:",omitempty" alias:"enforcing_consecutive_5xx"`
 
+	// EnforcingConsecutiveGatewayFailure is the % chance that a host will be actually ejected
+	// when an outlier status is detected through consecutive gateway failures.
+	// This setting can be used to disable ejection or to ramp it up slowly. Defaults to 0.
+	EnforcingConsecutiveGatewayFailure *uint32 `json:",omitempty" alias:"enforcing_consecutive_gateway_failure"`
+
+	// Consecutive5xx is the number of consecutive 5xx responses that trigger outlier detection.
+	// If not set, defaults to 5. Setting this overrides MaxFailures for 5xx detection.
+	Consecutive5xx *uint32 `json:",omitempty" alias:"consecutive_5xx"`
+
+	// ConsecutiveGatewayFailure is the number of consecutive gateway failures (502, 503, 504)
+	// that trigger outlier detection. If not set, defaults to 0 (disabled).
+	ConsecutiveGatewayFailure *uint32 `json:",omitempty" alias:"consecutive_gateway_failure"`
+
 	// The maximum % of an upstream cluster that can be ejected due to outlier detection.
 	// Defaults to 10% but will eject at least one host regardless of the value.
 	// TODO: remove me
@@ -1235,6 +1290,15 @@ func (chk PassiveHealthCheck) Validate() error {
 	if chk.EnforcingConsecutive5xx != nil && *chk.EnforcingConsecutive5xx > 100 {
 		return fmt.Errorf("passive health check enforcing_consecutive_5xx must be a percentage between 0 and 100")
 	}
+	if chk.EnforcingConsecutiveGatewayFailure != nil && *chk.EnforcingConsecutiveGatewayFailure > 100 {
+		return fmt.Errorf("passive health check enforcing_consecutive_gateway_failure must be a percentage between 0 and 100")
+	}
+	if chk.Consecutive5xx != nil && *chk.Consecutive5xx < 1 {
+		return fmt.Errorf("passive health check consecutive_5xx must be greater than 0")
+	}
+	if chk.ConsecutiveGatewayFailure != nil && *chk.ConsecutiveGatewayFailure < 1 {
+		return fmt.Errorf("passive health check consecutive_gateway_failure must be greater than 0")
+	}
 	if chk.MaxEjectionPercent != nil && *chk.MaxEjectionPercent > 100 {
 		return fmt.Errorf("passive health check max_ejection_percent must be a percentage between 0 and 100")
 	}
@@ -1261,6 +1325,12 @@ type UpstreamLimits struct {
 	// to the upstream cluster at a point in time. This is mostly applicable to HTTP/2
 	// clusters since all HTTP/1.1 requests are limited by MaxConnections.
 	MaxConcurrentRequests *int `json:",omitempty" alias:"max_concurrent_requests"`
+
+	// PassiveHealthCheck configuration determines how upstream proxy instances will
+	// be monitored for removal from the load balancing pool. When set on an API
+	// gateway's Defaults it applies to all routed services; a per-service value
+	// overrides it.
+	PassiveHealthCheck *PassiveHealthCheck `json:",omitempty" alias:"passive_health_check"`
 }
 
 func (ul *UpstreamLimits) Clone() *UpstreamLimits {
@@ -1271,6 +1341,7 @@ func (ul *UpstreamLimits) Clone() *UpstreamLimits {
 		MaxConnections:        intPointerCopy(ul.MaxConnections),
 		MaxPendingRequests:    intPointerCopy(ul.MaxPendingRequests),
 		MaxConcurrentRequests: intPointerCopy(ul.MaxConcurrentRequests),
+		PassiveHealthCheck:    ul.PassiveHealthCheck.Clone(),
 	}
 }
 
@@ -1296,6 +1367,11 @@ func (ul UpstreamLimits) Validate() error {
 	}
 	if ul.MaxConcurrentRequests != nil && *ul.MaxConcurrentRequests < 0 {
 		return fmt.Errorf("max concurrent requests cannot be negative")
+	}
+	if ul.PassiveHealthCheck != nil {
+		if err := ul.PassiveHealthCheck.Validate(); err != nil {
+			return err
+		}
 	}
 	return nil
 }

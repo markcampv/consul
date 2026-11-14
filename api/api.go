@@ -332,6 +332,9 @@ type QueryMeta struct {
 type WriteMeta struct {
 	// How long did the request take
 	RequestTime time.Duration
+
+	// Warnings contains any warning messages from the server
+	Warnings []string
 }
 
 // HttpBasicAuth is used to authenticate http client with HTTP Basic Authentication
@@ -468,7 +471,7 @@ func defaultConfig(logger hclog.Logger, transportFn func() *http.Transport) *Con
 	}
 
 	config := &Config{
-		Address:   "127.0.0.1:8500",
+		Address:   "localhost:8500",
 		Scheme:    "http",
 		Transport: transportFn(),
 	}
@@ -646,9 +649,7 @@ func (c *Client) Headers() http.Header {
 
 	ret := make(http.Header)
 	for k, v := range c.headers {
-		for _, val := range v {
-			ret[k] = append(ret[k], val)
-		}
+		ret[k] = append(ret[k], v...)
 	}
 
 	return ret
@@ -1033,12 +1034,11 @@ func (r *request) toHTTP() (*http.Request, error) {
 	req.Header = r.header
 
 	// Content-Type must always be set when a body is present
-	// See https://github.com/hashicorp/consul/issues/10011
 	if req.Body != nil && req.Header.Get("Content-Type") == "" {
-		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	}
 
-	// Setup auth
+	// Check for a token
 	if r.config.HttpAuth != nil {
 		req.SetBasicAuth(r.config.HttpAuth.Username, r.config.HttpAuth.Password)
 	}
@@ -1148,6 +1148,12 @@ func (c *Client) write(endpoint string, in, out interface{}, q *WriteOptions) (*
 	}
 
 	wm := &WriteMeta{RequestTime: rtt}
+
+	// Check for warning headers
+	if warning := resp.Header.Get("X-Consul-KV-Warning"); warning != "" {
+		wm.Warnings = append(wm.Warnings, warning)
+	}
+
 	if out != nil {
 		if err := decodeBody(resp, &out); err != nil {
 			return nil, err
@@ -1172,6 +1178,12 @@ func (c *Client) delete(endpoint string, q *QueryOptions) (*WriteMeta, error) {
 	}
 
 	wm := &WriteMeta{RequestTime: rtt}
+
+	// Check for warning headers
+	if warning := resp.Header.Get("X-Consul-KV-Warning"); warning != "" {
+		wm.Warnings = append(wm.Warnings, warning)
+	}
+
 	return wm, nil
 }
 
@@ -1313,7 +1325,7 @@ func generateUnexpectedResponseCodeError(resp *http.Response) error {
 	io.Copy(&buf, resp.Body)
 	closeResponseBody(resp)
 
-	trimmed := strings.TrimSpace(string(buf.Bytes()))
+	trimmed := strings.TrimSpace(buf.String())
 	return StatusError{Code: resp.StatusCode, Body: trimmed}
 }
 

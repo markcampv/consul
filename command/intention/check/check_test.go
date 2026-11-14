@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package check
@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/hashicorp/consul/agent"
+	"github.com/hashicorp/consul/agent/netutil"
 	"github.com/hashicorp/consul/api"
 	"github.com/hashicorp/consul/testrpc"
 	"github.com/mitchellh/cli"
@@ -68,6 +69,7 @@ func TestIntentionCheck_Validation(t *testing.T) {
 }
 
 func TestIntentionCheck(t *testing.T) {
+	netutil.GetAgentBindAddrFunc = netutil.GetMockGetAgentBindAddrFunc("0.0.0.0")
 	if testing.Short() {
 		t.Skip("too slow for testing.Short")
 	}

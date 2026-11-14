@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -8,4 +8,9 @@ export default FormComponent.extend({
   type: 'role',
   name: 'role',
   classNames: ['role-form'],
+  preventParentSubmit: function (event) {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+    }
+  },
 });

@@ -1,9 +1,9 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
-import { is, clickable, attribute, isVisible } from 'ember-cli-page-object';
+import { hasClass, clickable, isVisible } from 'ember-cli-page-object';
 import ucfirst from 'consul-ui/utils/ucfirst';
 export default function (name, items, blankKey = 'all') {
   return items.reduce(function (prev, item, i, arr) {
@@ -21,10 +21,12 @@ export default function (name, items, blankKey = 'all') {
     return {
       ...prev,
       ...{
-        [`${key}IsSelected`]: is('.selected', `[data-test-tab="${name}_${item}"]`),
-        [`${key}Url`]: attribute('href', `[data-test-tab="${name}_${item}"] a`),
-        [key]: clickable(`[data-test-tab="${name}_${item}"] a`),
-        [`${key}IsVisible`]: isVisible(`[data-test-tab="${name}_${item}"] a`),
+        [`${key}IsSelected`]: hasClass(
+          'hds-tabs__tab--is-selected',
+          `[data-test-tab="${name}_${item}"]`
+        ),
+        [key]: clickable(`[data-test-tab="${name}_${item}"] button`),
+        [`${key}IsVisible`]: isVisible(`[data-test-tab="${name}_${item}"] button`),
       },
     };
   }, {});

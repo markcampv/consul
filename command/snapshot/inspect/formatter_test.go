@@ -1,10 +1,9 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package inspect
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -46,7 +45,7 @@ func TestFormat(t *testing.T) {
 			actual, err := formatter.Format(&info)
 			require.NoError(t, err)
 
-			gName := fmt.Sprintf("%s", fmtName)
+			gName := fmtName
 
 			expected := golden(t, gName, actual)
 			require.Equal(t, expected, actual)

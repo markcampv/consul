@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package proxycfgglue
@@ -127,7 +127,7 @@ func TestServerServiceList(t *testing.T) {
 
 func newMockServiceList(t *testing.T) *mockServiceList {
 	mock := &mockServiceList{}
-	mock.Mock.Test(t)
+	mock.Test(t)
 
 	t.Cleanup(func() { mock.AssertExpectations(t) })
 

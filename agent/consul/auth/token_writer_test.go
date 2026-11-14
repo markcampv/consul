@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package auth
@@ -437,7 +437,7 @@ func TestTokenWriter_Create_Expiration(t *testing.T) {
 
 		updated, err := writer.Create(token, false)
 		require.NoError(t, err)
-		require.InEpsilon(t, 10*time.Minute, updated.ExpirationTime.Sub(time.Now()), 0.1)
+		require.InEpsilon(t, 10*time.Minute, time.Until(*updated.ExpirationTime), 0.1)
 		require.Zero(t, updated.ExpirationTTL)
 	})
 
@@ -485,6 +485,37 @@ func TestTokenWriter_Create_Success(t *testing.T) {
 	updated, err := writer.Create(token, false)
 	require.NoError(t, err)
 	require.NotNil(t, updated)
+}
+
+func TestTokenWriter_DoesNotPersistIDPLogoutURL(t *testing.T) {
+	store := testStateStore(t)
+
+	aclCache := &MockACLCache{}
+	aclCache.On("RemoveIdentityWithSecretToken", mock.Anything)
+	writer := buildTokenWriter(store, aclCache)
+
+	const injected = "https://idp.example.com/logout?id_token_hint=secret"
+
+	created, err := writer.Create(&structs.ACLToken{
+		AccessorID:     generateID(t),
+		SecretID:       generateID(t),
+		NodeIdentities: []*structs.ACLNodeIdentity{{NodeName: "n1", Datacenter: "dc1"}},
+		IDPLogoutURL:   injected,
+	}, false)
+	require.NoError(t, err)
+	require.Empty(t, created.IDPLogoutURL, "IDPLogoutURL must not be persisted on create")
+
+	updated, err := writer.Update(&structs.ACLToken{
+		AccessorID:     created.AccessorID,
+		NodeIdentities: created.NodeIdentities,
+		IDPLogoutURL:   injected,
+	})
+	require.NoError(t, err)
+	require.Empty(t, updated.IDPLogoutURL, "IDPLogoutURL must not be persisted on update")
+
+	_, stored, err := store.ACLTokenGetByAccessor(nil, created.AccessorID, nil)
+	require.NoError(t, err)
+	require.Empty(t, stored.IDPLogoutURL)
 }
 
 func TestTokenWriter_Update_Validation(t *testing.T) {

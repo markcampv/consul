@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package proxycfg
@@ -18,6 +18,7 @@ import (
 	"github.com/hashicorp/go-hclog"
 
 	cachetype "github.com/hashicorp/consul/agent/cache-types"
+	"github.com/hashicorp/consul/agent/featuregate"
 	"github.com/hashicorp/consul/agent/proxycfg/internal/watch"
 	"github.com/hashicorp/consul/agent/structs"
 	"github.com/hashicorp/consul/logging"
@@ -58,6 +59,7 @@ const (
 	upstreamPeerWatchIDPrefix          = "upstream-peer:"
 	exportedServiceListWatchID         = "exported-service-list"
 	meshConfigEntryID                  = "mesh"
+	featureGateWatchID                 = "feature-gate"
 	DestinationConfigEntryID           = "destination:"
 	DestinationGatewayID               = "dest-gateway:"
 	svcChecksWatchIDPrefix             = cachetype.ServiceHTTPChecksName + ":"
@@ -72,6 +74,8 @@ type stateConfig struct {
 	dnsConfig             DNSConfig
 	serverSNIFn           ServerSNIFunc
 	intentionDefaultAllow bool
+	featureGate           featuregate.Gate
+	agentless             bool
 }
 
 // state holds all the state needed to maintain the config for a registered
@@ -127,6 +131,7 @@ type serviceInstance struct {
 	proxyID         ProxyID
 	address         string
 	port            int
+	ports           structs.ServicePorts
 	meta            map[string]string
 	taggedAddresses map[string]structs.ServiceAddress
 	proxyCfg        structs.ConnectProxyConfig
@@ -150,10 +155,10 @@ func copyProxyConfig(ns *structs.NodeService) (structs.ConnectProxyConfig, error
 			// places and makes tracking these upstreams simpler as we can dedup them
 			// with the maps tracking upstream ids being watched.
 			if us.DestinationPartition == "" {
-				proxyCfg.Upstreams[idx].DestinationPartition = ns.EnterpriseMeta.PartitionOrDefault()
+				proxyCfg.Upstreams[idx].DestinationPartition = ns.PartitionOrDefault()
 			}
 			if us.DestinationNamespace == "" {
-				proxyCfg.Upstreams[idx].DestinationNamespace = ns.EnterpriseMeta.NamespaceOrDefault()
+				proxyCfg.Upstreams[idx].DestinationNamespace = ns.NamespaceOrDefault()
 			}
 
 			// If PeerName is not empty, the DestinationPartition refers
@@ -217,14 +222,15 @@ func newKindHandler(config stateConfig, s serviceInstance, ch chan UpdateEvent) 
 	case structs.ServiceKindConnectProxy:
 		handler = &handlerConnectProxy{handlerState: h}
 	case structs.ServiceKindTerminatingGateway:
-		h.stateConfig.logger = config.logger.Named(logging.TerminatingGateway)
+		h.logger = config.logger.Named(logging.TerminatingGateway)
 		handler = &handlerTerminatingGateway{handlerState: h}
 	case structs.ServiceKindMeshGateway:
-		h.stateConfig.logger = config.logger.Named(logging.MeshGateway)
+		h.logger = config.logger.Named(logging.MeshGateway)
 		handler = &handlerMeshGateway{handlerState: h}
 	case structs.ServiceKindIngressGateway:
 		handler = &handlerIngressGateway{handlerState: h}
 	case structs.ServiceKindAPIGateway:
+		h.logger = config.logger.Named(logging.APIGateway)
 		handler = &handlerAPIGateway{handlerState: h}
 	default:
 		return nil, errors.New("not a connect-proxy, terminating-gateway, mesh-gateway, or ingress-gateway")
@@ -248,6 +254,8 @@ func newServiceInstanceFromNodeService(id ProxyID, ns *structs.NodeService, toke
 	for k, v := range ns.Meta {
 		meta[k] = v
 	}
+	ports := make(structs.ServicePorts, len(ns.Ports))
+	copy(ports, ns.Ports)
 
 	return serviceInstance{
 		kind:            ns.Kind,
@@ -256,6 +264,7 @@ func newServiceInstanceFromNodeService(id ProxyID, ns *structs.NodeService, toke
 		proxyID:         id,
 		address:         ns.Address,
 		port:            ns.Port,
+		ports:           ports,
 		meta:            meta,
 		taggedAddresses: taggedAddresses,
 		proxyCfg:        proxyCfg,
@@ -287,16 +296,15 @@ func (s *state) Watch() (<-chan ConfigSnapshot, error) {
 	return s.snapCh, nil
 }
 
-// Close discards the state and stops any long-running watches.
+// Close discards the state and stops any long-running watches. It also stops
+// the watches of a state whose run loop has already exited, and is safe to
+// call more than once.
 func (s *state) Close(failed bool) error {
-	if s.stoppedRunning() {
-		return nil
+	if failed && !s.stoppedRunning() {
+		atomic.StoreInt32(&s.failedFlag, 1)
 	}
 	if s.cancel != nil {
 		s.cancel()
-	}
-	if failed {
-		atomic.StoreInt32(&s.failedFlag, 1)
 	}
 	return nil
 }
@@ -316,6 +324,7 @@ func newConfigSnapshotFromServiceInstance(s serviceInstance, config stateConfig)
 		ProxyID:               s.proxyID,
 		Address:               s.address,
 		Port:                  s.port,
+		Ports:                 s.ports,
 		ServiceMeta:           s.meta,
 		TaggedAddresses:       s.taggedAddresses,
 		Proxy:                 s.proxyCfg,
@@ -323,6 +332,7 @@ func newConfigSnapshotFromServiceInstance(s serviceInstance, config stateConfig)
 		Locality:              GatewayKey{Datacenter: config.source.Datacenter, Partition: s.proxyID.PartitionOrDefault()},
 		ServerSNIFn:           config.serverSNIFn,
 		IntentionDefaultAllow: config.intentionDefaultAllow,
+		LocalizedDNSEnabled:   config.featureGate != nil && config.featureGate.Enabled(featuregate.LocalizedDNS),
 	}
 }
 
@@ -336,6 +346,11 @@ func (s *state) run(ctx context.Context, snap *ConfigSnapshot) {
 				"service", s.serviceInstance.proxyID.ServiceID,
 				"message", r,
 				"stacktrace", string(debug.Stack()))
+		}
+		// Nothing consumes this state's updates once run exits, so stop its
+		// watches regardless of why it exited (including a recovered panic).
+		if s.cancel != nil {
+			s.cancel()
 		}
 	}()
 	s.unsafeRun(ctx, snap)
@@ -492,6 +507,7 @@ func (s *state) Changed(ns *structs.NodeService, token string) bool {
 	return ns.Kind != i.kind ||
 		i.address != ns.Address ||
 		i.port != ns.Port ||
+		!i.ports.IsSame(ns.Ports) ||
 		!reflect.DeepEqual(i.proxyCfg, proxyCfg) ||
 		i.token != token
 }

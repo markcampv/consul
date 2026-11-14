@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package consul
@@ -13,11 +13,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/armon/go-metrics"
-	"github.com/armon/go-metrics/prometheus"
 	"golang.org/x/time/rate"
 
 	"github.com/hashicorp/go-hclog"
+	"github.com/hashicorp/go-metrics"
+	"github.com/hashicorp/go-metrics/prometheus"
 	"github.com/hashicorp/go-uuid"
 	"github.com/hashicorp/go-version"
 	"github.com/hashicorp/raft"
@@ -310,6 +310,7 @@ func (s *Server) establishLeadership(ctx context.Context) error {
 
 	s.getOrCreateAutopilotConfig()
 	s.autopilot.EnableReconciliation()
+	s.startFeatureGateReconciliation(ctx)
 
 	s.startConfigReplication(ctx)
 
@@ -322,6 +323,8 @@ func (s *Server) establishLeadership(ctx context.Context) error {
 	}
 
 	s.startDeferredDeletion(ctx)
+
+	s.startMeshPQCMetrics(ctx)
 
 	if err := s.startConnectLeader(ctx); err != nil {
 		return err
@@ -340,9 +343,8 @@ func (s *Server) establishLeadership(ctx context.Context) error {
 		s.startLogVerification(ctx)
 	}
 
-	if s.config.Reporting.License.Enabled && s.reportingManager != nil {
-		s.reportingManager.StartReportingAgent()
-	}
+	// The reporting manager will start the metrics collection but will only report if config.reporting.license.enabled is true
+	s.reportingManager.StartReportingAgent()
 
 	s.logger.Debug("successfully established leadership", "duration", time.Since(start))
 	return nil
@@ -353,6 +355,7 @@ func (s *Server) establishLeadership(ctx context.Context) error {
 func (s *Server) revokeLeadership() {
 
 	s.stopLogVerification()
+	s.stopFeatureGateReconciliation()
 
 	// Disable the tombstone GC, since it is only useful as a leader
 	s.tombstoneGC.SetEnabled(false)
@@ -364,6 +367,8 @@ func (s *Server) revokeLeadership() {
 	s.revokeEnterpriseLeadership()
 
 	s.stopDeferredDeletion()
+
+	s.stopMeshPQCMetrics()
 
 	s.stopFederationStateAntiEntropy()
 
@@ -395,7 +400,7 @@ func (s *Server) initializeACLs(ctx context.Context) error {
 
 	// Purge the cache, since it could've changed while we were not the
 	// leader.
-	s.ACLResolver.cache.Purge()
+	s.cache.Purge()
 
 	// Purge the auth method validators since they could've changed while we
 	// were not leader.
@@ -431,14 +436,6 @@ func (s *Server) initializeACLs(ctx context.Context) error {
 			err := s.initializeManagementToken("Initial Management Token", initialManagement)
 			if err != nil {
 				return fmt.Errorf("failed to initialize initial management token: %w", err)
-			}
-		}
-
-		// Check for configured management token from HCP. It MUST NOT override the user-provided initial management token.
-		if hcpManagement := s.config.Cloud.ManagementToken; len(hcpManagement) > 0 {
-			err := s.initializeManagementToken("HCP Management Token", hcpManagement)
-			if err != nil {
-				return fmt.Errorf("failed to initialize HCP management token: %w", err)
 			}
 		}
 

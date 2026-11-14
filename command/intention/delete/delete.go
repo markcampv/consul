@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package delete
@@ -71,7 +71,7 @@ func (c *cmd) Run(args []string) int {
 		return 1
 	}
 
-	c.UI.Output(fmt.Sprintf("Intention deleted."))
+	c.UI.Output("Intention deleted.")
 	return 0
 }
 

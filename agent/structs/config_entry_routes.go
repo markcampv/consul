@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package structs
@@ -95,8 +95,8 @@ func (e *HTTPRouteConfigEntry) Normalize() error {
 		if parent.Kind == "" {
 			parent.Kind = APIGateway
 		}
-		parent.EnterpriseMeta.Merge(e.GetEnterpriseMeta())
-		parent.EnterpriseMeta.Normalize()
+		parent.Merge(e.GetEnterpriseMeta())
+		parent.Normalize()
 		e.Parents[i] = parent
 	}
 
@@ -121,9 +121,9 @@ func (e *HTTPRouteConfigEntry) Normalize() error {
 }
 
 func (e *HTTPRouteConfigEntry) normalizeHTTPService(service HTTPService) HTTPService {
-	service.EnterpriseMeta.Merge(e.GetEnterpriseMeta())
-	service.EnterpriseMeta.Normalize()
-	if service.Weight <= 0 {
+	service.Merge(e.GetEnterpriseMeta())
+	service.Normalize()
+	if service.Weight < 0 {
 		service.Weight = 1
 	}
 	return service
@@ -178,7 +178,7 @@ func (e *HTTPRouteConfigEntry) Validate() error {
 	}
 
 	for i, rule := range e.Rules {
-		if err := validateRule(rule); err != nil {
+		if err := validateRule(rule, e.Hostnames); err != nil {
 			return fmt.Errorf("Rule[%d], %w", i, err)
 		}
 	}
@@ -186,7 +186,7 @@ func (e *HTTPRouteConfigEntry) Validate() error {
 	return nil
 }
 
-func validateRule(rule HTTPRouteRule) error {
+func validateRule(rule HTTPRouteRule, routeHostnames []string) error {
 	if err := validateFilters(rule.Filters); err != nil {
 		return err
 	}
@@ -198,7 +198,7 @@ func validateRule(rule HTTPRouteRule) error {
 	}
 
 	for i, service := range rule.Services {
-		if err := validateHTTPService(service); err != nil {
+		if err := validateHTTPService(service, routeHostnames); err != nil {
 			return fmt.Errorf("Service[%d], %w", i, err)
 		}
 	}
@@ -232,8 +232,38 @@ func validateMatch(match HTTPMatch) error {
 	return nil
 }
 
-func validateHTTPService(service HTTPService) error {
-	return validateFilters(service.Filters)
+func validateRouteServiceSDSConfig(svcSDS *GatewayTLSSDSConfig, requireHostnames bool, routeHostnames []string) error {
+	if svcSDS == nil {
+		return nil
+	}
+
+	if svcSDS.CertResource == "" {
+		return fmt.Errorf("TLS.SDS.CertResource is required when service TLS.SDS is configured")
+	}
+
+	if requireHostnames && len(routeHostnames) == 0 {
+		return fmt.Errorf("service TLS.SDS requires route hostnames to be set")
+	}
+
+	return nil
+}
+
+func validateHTTPService(service HTTPService, routeHostnames []string) error {
+	if err := validateRouteServiceSDSConfig(service.TLS.SDSOrNil(), true, routeHostnames); err != nil {
+		return err
+	}
+
+	if err := validateFilters(service.Filters); err != nil {
+		return err
+	}
+
+	if service.Limits != nil {
+		if err := service.Limits.Validate(); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func validateFilters(filter HTTPFilters) error {
@@ -422,9 +452,10 @@ const (
 // HTTPHeaderMatch specifies how a match should be done
 // on a request's headers.
 type HTTPHeaderMatch struct {
-	Match HTTPHeaderMatchType
-	Name  string
-	Value string
+	Match  HTTPHeaderMatchType
+	Name   string
+	Value  string
+	Invert bool `json:",omitempty"`
 }
 
 // HTTPPathMatchType specifies how path matching criteria
@@ -470,6 +501,55 @@ type HTTPFilters struct {
 	RetryFilter   *RetryFilter
 	TimeoutFilter *TimeoutFilter
 	JWT           *JWTFilter
+	ExtProc       []ExtProcFilter
+	// ExtAuthz controls the ext_authz HTTP filter behaviour for routes on an
+	// API Gateway that has a builtin/ext-authz EnvoyExtension applied. When set,
+	// it overrides the gateway-wide ExtAuthz toggle for the matched route:
+	// Enabled=true forces the ext_authz check to run, Enabled=false skips it.
+	// When nil, the route inherits the gateway-wide default. Exclusions are
+	// controlled exclusively at the http-route level.
+	//
+	// HTTPRouteExtAuthzFilter is an enterprise-only type: it is an empty struct in
+	// CE and carries its fields only in the enterprise build (see
+	// config_entry_apigw_extauthz_{ce,ent}.go).
+	ExtAuthz *HTTPRouteExtAuthzFilter
+}
+
+// ExtProcFilter provides per-route control of a builtin/ext-proc attachment.
+type ExtProcFilter struct {
+	StatPrefix string            `json:",omitempty"`
+	Mode       string            `json:",omitempty"`
+	Overrides  *ExtProcOverrides `json:",omitempty"`
+}
+
+// ExtProcMetadataKV is a single key/value pair injected as gRPC initial metadata
+// on the ext_proc stream when Mode is "override". Used by CAMP to pass the
+// per-route credential binding ID (x-camp-auth-binding) to the auth processor.
+type ExtProcMetadataKV struct {
+	Key   string `json:",omitempty"`
+	Value string `json:",omitempty"`
+}
+
+// ExtProcOverrides carries per-route overrides applied when Mode is "override".
+type ExtProcOverrides struct {
+	Processing          *ExtProcProcessing  `json:",omitempty"`
+	GRPCInitialMetadata []ExtProcMetadataKV `json:",omitempty"`
+	// MessageTimeout   string              `json:",omitempty"`
+	// FailureModeAllow *bool               `json:",omitempty"`
+}
+
+// ExtProcProcessing configures request and response processing modes.
+type ExtProcProcessing struct {
+	Request  *ExtProcProcessingDirection `json:",omitempty"`
+	Response *ExtProcProcessingDirection `json:",omitempty"`
+}
+
+// ExtProcProcessingDirection configures processing modes for one direction.
+type ExtProcProcessingDirection struct {
+	HeadersMode  string `json:",omitempty"`
+	BodyMode     string `json:",omitempty"`
+	TrailersMode string `json:",omitempty"`
+	MaxBodyBytes int64  `json:",omitempty"`
 }
 
 // HTTPResponseFilters specifies a list of filters used to modify the
@@ -533,11 +613,23 @@ type HTTPService struct {
 	// response returned from the upstream service
 	ResponseFilters HTTPResponseFilters
 
+	// TLS allows overriding listener-level TLS certificate settings for this service.
+	TLS *GatewayServiceTLSConfig `json:",omitempty"`
+	// Limits are upstream circuit-breaker limits applied to this routed service.
+	Limits *UpstreamLimits `json:",omitempty"`
+
 	acl.EnterpriseMeta `hcl:",squash" mapstructure:",squash"`
 }
 
 func (s HTTPService) ServiceName() ServiceName {
 	return NewServiceName(s.Name, &s.EnterpriseMeta)
+}
+
+func (s HTTPService) SDSConfigOrNil() *GatewayTLSSDSConfig {
+	if s.TLS == nil {
+		return nil
+	}
+	return s.TLS.SDS
 }
 
 // TCPRouteConfigEntry manages the configuration for a TCP route
@@ -605,14 +697,14 @@ func (e *TCPRouteConfigEntry) Normalize() error {
 		if parent.Kind == "" {
 			parent.Kind = APIGateway
 		}
-		parent.EnterpriseMeta.Merge(e.GetEnterpriseMeta())
-		parent.EnterpriseMeta.Normalize()
+		parent.Merge(e.GetEnterpriseMeta())
+		parent.Normalize()
 		e.Parents[i] = parent
 	}
 
 	for i, service := range e.Services {
-		service.EnterpriseMeta.Merge(e.GetEnterpriseMeta())
-		service.EnterpriseMeta.Normalize()
+		service.Merge(e.GetEnterpriseMeta())
+		service.Normalize()
 		e.Services[i] = service
 	}
 
@@ -633,6 +725,12 @@ func (e *TCPRouteConfigEntry) Validate() error {
 		return fmt.Errorf("tcp-route currently only supports one service")
 	}
 
+	for i, service := range e.Services {
+		if err := validateRouteServiceSDSConfig(service.SDSConfigOrNil(), false, nil); err != nil {
+			return fmt.Errorf("Service[%d], %w", i, err)
+		}
+	}
+
 	uniques := make(map[ResourceReference]struct{}, len(e.Parents))
 
 	for _, parent := range e.Parents {
@@ -649,6 +747,22 @@ func (e *TCPRouteConfigEntry) Validate() error {
 
 	if err := validateConfigEntryMeta(e.Meta); err != nil {
 		return err
+	}
+
+	for i, service := range e.Services {
+		if err := validateTCPService(service); err != nil {
+			return fmt.Errorf("Service[%d], %w", i, err)
+		}
+	}
+
+	return nil
+}
+
+func validateTCPService(service TCPService) error {
+	if service.Limits != nil {
+		if err := service.Limits.Validate(); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -670,9 +784,28 @@ func (e *TCPRouteConfigEntry) CanWrite(authz acl.Authorizer) error {
 type TCPService struct {
 	Name string
 
+	// TLS allows overriding listener-level TLS certificate settings for this service.
+	TLS *GatewayServiceTLSConfig `json:",omitempty"`
+	// Limits are upstream circuit-breaker limits applied to this routed service.
+	Limits *UpstreamLimits `json:",omitempty"`
+
 	acl.EnterpriseMeta `hcl:",squash" mapstructure:",squash"`
 }
 
 func (s TCPService) ServiceName() ServiceName {
 	return NewServiceName(s.Name, &s.EnterpriseMeta)
+}
+
+func (s TCPService) SDSConfigOrNil() *GatewayTLSSDSConfig {
+	if s.TLS == nil {
+		return nil
+	}
+	return s.TLS.SDS
+}
+
+func (t *GatewayServiceTLSConfig) SDSOrNil() *GatewayTLSSDSConfig {
+	if t == nil {
+		return nil
+	}
+	return t.SDS
 }

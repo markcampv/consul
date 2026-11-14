@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package state
@@ -13,6 +13,7 @@ import (
 
 	"github.com/hashicorp/consul/acl"
 	"github.com/hashicorp/consul/agent/consul/stream"
+	"github.com/hashicorp/consul/agent/netutil"
 	"github.com/hashicorp/consul/agent/structs"
 	"github.com/hashicorp/consul/api"
 	"github.com/hashicorp/consul/proto/private/pbsubscribe"
@@ -73,7 +74,26 @@ func TestServiceHealthSnapshot(t *testing.T) {
 	prototest.AssertDeepEqual(t, expected, buf.events, cmpEvents)
 }
 
+func TestEventPayloadCheckServiceNode_ToSubscriptionEvent_PopulatesLegacyPort(t *testing.T) {
+	service := &structs.NodeService{
+		Ports: structs.ServicePorts{
+			{Name: "http", Port: 8080, Default: true},
+		},
+	}
+	payload := EventPayloadCheckServiceNode{
+		Op: pbsubscribe.CatalogOp_Register,
+		Value: &structs.CheckServiceNode{
+			Service: service,
+		},
+	}
+
+	event := payload.ToSubscriptionEvent(1)
+	require.Equal(t, int32(8080), event.GetServiceHealth().GetCheckServiceNode().GetService().GetPort())
+	require.Zero(t, service.Port, "converting the event must not mutate the state-store value")
+}
+
 func TestServiceHealthSnapshot_ConnectTopic(t *testing.T) {
+	netutil.GetAgentBindAddrFunc = netutil.GetMockGetAgentBindAddrFunc("0.0.0.0")
 	store := NewStateStore(nil)
 
 	setVirtualIPFlags(t, store)
@@ -1742,6 +1762,7 @@ func TestServiceHealthEventsFromChanges(t *testing.T) {
 }
 
 func (tc eventsTestCase) run(t *testing.T) {
+	netutil.GetAgentBindAddrFunc = netutil.GetMockGetAgentBindAddrFunc("0.0.0.0")
 	s := NewStateStore(nil)
 	require.NoError(t, s.SystemMetadataSet(0, &structs.SystemMetadataEntry{
 		Key:   structs.SystemMetadataVirtualIPsEnabled,
@@ -1888,11 +1909,11 @@ var cmpPartialOrderEvents = cmp.Options{
 			if payload.overrideKey != "" {
 				name = payload.overrideKey
 			}
-			ns := csn.Service.EnterpriseMeta.NamespaceOrDefault()
+			ns := csn.Service.NamespaceOrDefault()
 			if payload.overrideNamespace != "" {
 				ns = payload.overrideNamespace
 			}
-			ap := csn.Service.EnterpriseMeta.PartitionOrDefault()
+			ap := csn.Service.PartitionOrDefault()
 			if payload.overridePartition != "" {
 				ap = payload.overridePartition
 			}

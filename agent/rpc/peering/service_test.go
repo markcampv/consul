@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package peering_test
@@ -1909,8 +1909,8 @@ type testingServer struct {
 
 func newConfig(t *testing.T, dc, agentType string) resolver.Config {
 	n := t.Name()
-	s := strings.Replace(n, "/", "", -1)
-	s = strings.Replace(s, "_", "", -1)
+	s := strings.ReplaceAll(n, "/", "")
+	s = strings.ReplaceAll(s, "_", "")
 	return resolver.Config{
 		Datacenter: dc,
 		AgentType:  agentType,

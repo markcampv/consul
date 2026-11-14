@@ -310,7 +310,7 @@ func NewTestServerConfigT(t TestingTB, cb ServerConfigCallback) (*TestServer, er
 		prefix := "consul"
 		if t != nil {
 			// Use test name for tmpdir if available
-			prefix = strings.Replace(t.Name(), "/", "_", -1)
+			prefix = strings.ReplaceAll(t.Name(), "/", "_")
 		}
 		tmpdir, err = os.MkdirTemp("", prefix)
 		if err != nil {
@@ -684,7 +684,10 @@ func (s *TestServer) privilegedGet(url string) (*http.Response, error) {
 	if s.Config.ACL.Tokens.InitialManagement != "" {
 		req.Header.Set("x-consul-token", s.Config.ACL.Tokens.InitialManagement)
 	}
-	return s.HTTPClient.Do(req)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	return s.HTTPClient.Do(req.WithContext(ctx))
 }
 
 func (s *TestServer) privilegedDelete(url string) (*http.Response, error) {
@@ -695,7 +698,10 @@ func (s *TestServer) privilegedDelete(url string) (*http.Response, error) {
 	if s.Config.ACL.Tokens.InitialManagement != "" {
 		req.Header.Set("x-consul-token", s.Config.ACL.Tokens.InitialManagement)
 	}
-	return s.HTTPClient.Do(req)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	return s.HTTPClient.Do(req.WithContext(ctx))
 }
 
 func findConsulVersion() (*version.Version, error) {

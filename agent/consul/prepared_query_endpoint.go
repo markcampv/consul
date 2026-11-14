@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package consul
@@ -8,13 +8,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/armon/go-metrics"
-	"github.com/armon/go-metrics/prometheus"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-memdb"
+	"github.com/hashicorp/go-metrics"
+	"github.com/hashicorp/go-metrics/prometheus"
 	"github.com/hashicorp/go-uuid"
 
 	"github.com/hashicorp/consul/acl"
+	"github.com/hashicorp/consul/agent/consul/adapter"
 	"github.com/hashicorp/consul/agent/consul/state"
 	"github.com/hashicorp/consul/agent/structs"
 	"github.com/hashicorp/consul/agent/structs/aclfilter"
@@ -390,7 +391,7 @@ func (p *PreparedQuery) Execute(args *structs.PreparedQueryExecuteRequest,
 
 		// If they supplied a token with the query, use that, otherwise use the
 		// token passed in with the request.
-		token := args.QueryOptions.Token
+		token := args.Token
 		if query.Token != "" {
 			token = query.Token
 		}
@@ -489,6 +490,7 @@ func (p *PreparedQuery) Execute(args *structs.PreparedQueryExecuteRequest,
 		}
 	}
 
+	adapter.PopulateLegacyCheckServiceNodePorts(reply.Nodes)
 	return nil
 }
 
@@ -518,7 +520,7 @@ func (p *PreparedQuery) ExecuteRemote(args *structs.PreparedQueryExecuteRemoteRe
 
 	// If they supplied a token with the query, use that, otherwise use the
 	// token passed in with the request.
-	token := args.QueryOptions.Token
+	token := args.Token
 	if args.Query.Token != "" {
 		token = args.Query.Token
 	}
@@ -539,6 +541,7 @@ func (p *PreparedQuery) ExecuteRemote(args *structs.PreparedQueryExecuteRemoteRe
 		reply.Nodes = reply.Nodes[:args.Limit]
 	}
 
+	adapter.PopulateLegacyCheckServiceNodePorts(reply.Nodes)
 	return nil
 }
 
@@ -770,7 +773,7 @@ func queryFailover(q queryServer, query structs.PreparedQuery,
 	index := make(map[string]struct{})
 	if query.Service.Failover.NearestN > 0 {
 		for i, dc := range nearest {
-			if !(i < query.Service.Failover.NearestN) {
+			if i >= query.Service.Failover.NearestN {
 				break
 			}
 

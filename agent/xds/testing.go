@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package xds
@@ -42,7 +42,7 @@ func NewTestADSDeltaStream(t testing.T, ctx context.Context) *TestADSDeltaStream
 		sendCh: make(chan *envoy_discovery_v3.DeltaDiscoveryResponse, 1),
 		recvCh: make(chan *envoy_discovery_v3.DeltaDiscoveryRequest, 1),
 	}
-	s.stubGrpcServerStream.ctx = ctx
+	s.ctx = ctx
 	return s
 }
 

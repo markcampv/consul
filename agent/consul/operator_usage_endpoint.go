@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package consul
@@ -59,7 +59,7 @@ func (op *Operator) Usage(args *structs.OperatorUsageRequest, reply *structs.Usa
 				return err
 			}
 
-			reply.QueryMeta.Index, reply.Usage[op.srv.config.Datacenter] = index, serviceUsage
+			reply.Index, reply.Usage[op.srv.config.Datacenter] = index, serviceUsage
 			return nil
 		})
 }

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package consul
@@ -17,6 +17,7 @@ import (
 
 	"github.com/hashicorp/consul/acl"
 	"github.com/hashicorp/consul/agent/configentry"
+	"github.com/hashicorp/consul/agent/netutil"
 	"github.com/hashicorp/consul/agent/structs"
 	"github.com/hashicorp/consul/sdk/testutil"
 	"github.com/hashicorp/consul/sdk/testutil/retry"
@@ -269,7 +270,7 @@ operator = "write"
 	}
 
 	// Now with the privileged token.
-	proxyArgs.WriteRequest.Token = id
+	proxyArgs.Token = id
 	err = msgpackrpc.CallWithCodec(codec, "ConfigEntry.Apply", &proxyArgs, &out)
 	require.NoError(t, err)
 }
@@ -340,7 +341,7 @@ func TestConfigEntry_Get_BlockOnNonExistent(t *testing.T) {
 					Kind: structs.ServiceDefaults,
 					Name: "does-not-exist",
 				}
-				args.QueryOptions.MinQueryIndex = minQueryIndex
+				args.MinQueryIndex = minQueryIndex
 
 				var out structs.ConfigEntryResponse
 				errCh := channelCallRPC(s1, "ConfigEntry.Get", &args, &out, nil)
@@ -487,7 +488,7 @@ func TestConfigEntry_List_BlockOnNoChange(t *testing.T) {
 					Kind:       structs.ServiceDefaults,
 					Datacenter: "dc1",
 				}
-				args.QueryOptions.MinQueryIndex = minQueryIndex
+				args.MinQueryIndex = minQueryIndex
 
 				var out structs.IndexedConfigEntries
 
@@ -759,6 +760,7 @@ func TestConfigEntry_List_Filter_UnsupportedType(t *testing.T) {
 }
 
 func TestConfigEntry_List_ACLDeny(t *testing.T) {
+	netutil.GetAgentBindAddrFunc = netutil.GetMockGetAgentBindAddrFunc("0.0.0.0")
 	if testing.Short() {
 		t.Skip("too slow for testing.Short")
 	}
@@ -815,7 +817,7 @@ operator = "read"
 	require.True(t, ok)
 	require.Equal(t, "foo", serviceConf.Name)
 	require.Equal(t, structs.ServiceDefaults, serviceConf.Kind)
-	require.True(t, out.QueryMeta.ResultsFilteredByACLs, "ResultsFilteredByACLs should be true")
+	require.True(t, out.ResultsFilteredByACLs, "ResultsFilteredByACLs should be true")
 
 	// Get the global proxy config.
 	args.Kind = structs.ProxyDefaults
@@ -827,7 +829,7 @@ operator = "read"
 	require.True(t, ok)
 	require.Equal(t, structs.ProxyConfigGlobal, proxyConf.Name)
 	require.Equal(t, structs.ProxyDefaults, proxyConf.Kind)
-	require.False(t, out.QueryMeta.ResultsFilteredByACLs, "ResultsFilteredByACLs should be false")
+	require.False(t, out.ResultsFilteredByACLs, "ResultsFilteredByACLs should be false")
 
 	// ensure ACL filtering occurs before bexpr filtering.
 	const bexprMatchingUserTokenPermissions = "Name matches `f.*`"
@@ -883,6 +885,7 @@ operator = "read"
 }
 
 func TestConfigEntry_ListAll_ACLDeny(t *testing.T) {
+	netutil.GetAgentBindAddrFunc = netutil.GetMockGetAgentBindAddrFunc("0.0.0.0")
 	if testing.Short() {
 		t.Skip("too slow for testing.Short")
 	}
@@ -950,10 +953,11 @@ operator = "read"
 	require.Equal(t, structs.ServiceDefaults, svcConf.Kind)
 	require.Equal(t, structs.ProxyConfigGlobal, proxyConf.Name)
 	require.Equal(t, structs.ProxyDefaults, proxyConf.Kind)
-	require.True(t, out.QueryMeta.ResultsFilteredByACLs, "ResultsFilteredByACLs should be true")
+	require.True(t, out.ResultsFilteredByACLs, "ResultsFilteredByACLs should be true")
 }
 
 func TestConfigEntry_Delete(t *testing.T) {
+	netutil.GetAgentBindAddrFunc = netutil.GetMockGetAgentBindAddrFunc("0.0.0.0")
 	if testing.Short() {
 		t.Skip("too slow for testing.Short")
 	}
@@ -1050,6 +1054,7 @@ func TestConfigEntry_Delete(t *testing.T) {
 }
 
 func TestConfigEntry_DeleteCAS(t *testing.T) {
+	netutil.GetAgentBindAddrFunc = netutil.GetMockGetAgentBindAddrFunc("0.0.0.0")
 	if testing.Short() {
 		t.Skip("too slow for testing.Short")
 	}
@@ -1106,6 +1111,7 @@ func TestConfigEntry_DeleteCAS(t *testing.T) {
 }
 
 func TestConfigEntry_Delete_ACLDeny(t *testing.T) {
+	netutil.GetAgentBindAddrFunc = netutil.GetMockGetAgentBindAddrFunc("0.0.0.0")
 	if testing.Short() {
 		t.Skip("too slow for testing.Short")
 	}
@@ -1181,7 +1187,7 @@ operator = "write"
 	}
 
 	// Now delete with a valid token.
-	args.WriteRequest.Token = id
+	args.Token = id
 	require.NoError(t, msgpackrpc.CallWithCodec(codec, "ConfigEntry.Delete", &args, &out))
 
 	_, existing, err = state.ConfigEntry(nil, structs.ServiceDefaults, "foo", nil)
@@ -1678,11 +1684,14 @@ func TestConfigEntry_ResolveServiceConfig_Upstreams(t *testing.T) {
 						Upstream: wildcard,
 						Config: map[string]interface{}{
 							"passive_health_check": map[string]interface{}{
-								"Interval":                int64(10),
-								"MaxFailures":             int64(2),
-								"EnforcingConsecutive5xx": int64(60),
-								"MaxEjectionPercent":      int64(61),
-								"BaseEjectionTime":        uint64(62 * time.Second),
+								"Interval":                           int64(10),
+								"MaxFailures":                        int64(2),
+								"EnforcingConsecutive5xx":            int64(60),
+								"EnforcingConsecutiveGatewayFailure": interface{}(nil),
+								"Consecutive5xx":                     interface{}(nil),
+								"ConsecutiveGatewayFailure":          interface{}(nil),
+								"MaxEjectionPercent":                 int64(61),
+								"BaseEjectionTime":                   uint64(62 * time.Second),
 							},
 							"mesh_gateway": map[string]interface{}{
 								"Mode": "none",
@@ -1694,11 +1703,14 @@ func TestConfigEntry_ResolveServiceConfig_Upstreams(t *testing.T) {
 						Upstream: mysql,
 						Config: map[string]interface{}{
 							"passive_health_check": map[string]interface{}{
-								"Interval":                int64(10),
-								"MaxFailures":             int64(2),
-								"EnforcingConsecutive5xx": int64(60),
-								"MaxEjectionPercent":      int64(61),
-								"BaseEjectionTime":        uint64(62 * time.Second),
+								"Interval":                           int64(10),
+								"MaxFailures":                        int64(2),
+								"EnforcingConsecutive5xx":            int64(60),
+								"EnforcingConsecutiveGatewayFailure": interface{}(nil),
+								"Consecutive5xx":                     interface{}(nil),
+								"ConsecutiveGatewayFailure":          interface{}(nil),
+								"MaxEjectionPercent":                 int64(61),
+								"BaseEjectionTime":                   uint64(62 * time.Second),
 							},
 							"mesh_gateway": map[string]interface{}{
 								"Mode": "local",
@@ -2421,6 +2433,7 @@ func BenchmarkConfigEntry_ResolveServiceConfig_Hash(b *testing.B) {
 }
 
 func TestConfigEntry_ResolveServiceConfig_BlockOnNoChange(t *testing.T) {
+	netutil.GetAgentBindAddrFunc = netutil.GetMockGetAgentBindAddrFunc("0.0.0.0")
 	if testing.Short() {
 		t.Skip("too slow for testing.Short")
 	}
@@ -2442,7 +2455,7 @@ func TestConfigEntry_ResolveServiceConfig_BlockOnNoChange(t *testing.T) {
 						{ServiceName: structs.NewServiceName("bar", nil)},
 					},
 				}
-				args.QueryOptions.MinQueryIndex = minQueryIndex
+				args.MinQueryIndex = minQueryIndex
 
 				var out structs.ServiceConfigResponse
 
@@ -2534,6 +2547,7 @@ func TestConfigEntry_ResolveServiceConfigNoConfig(t *testing.T) {
 }
 
 func TestConfigEntry_ResolveServiceConfig_ACLDeny(t *testing.T) {
+	netutil.GetAgentBindAddrFunc = netutil.GetMockGetAgentBindAddrFunc("0.0.0.0")
 	if testing.Short() {
 		t.Skip("too slow for testing.Short")
 	}

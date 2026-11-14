@@ -1,11 +1,10 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package consul
 
 import (
 	"context"
-	"crypto/tls"
 	"crypto/x509"
 	"fmt"
 	"net"
@@ -17,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/armon/go-metrics"
 	"github.com/google/tcpproxy"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -27,6 +25,7 @@ import (
 
 	"github.com/hashicorp/consul-net-rpc/net/rpc"
 	"github.com/hashicorp/go-hclog"
+	"github.com/hashicorp/go-metrics"
 	"github.com/hashicorp/go-uuid"
 	"github.com/hashicorp/memberlist"
 	"github.com/hashicorp/raft"
@@ -36,8 +35,6 @@ import (
 	rpcRate "github.com/hashicorp/consul/agent/consul/rate"
 	external "github.com/hashicorp/consul/agent/grpc-external"
 	grpcmiddleware "github.com/hashicorp/consul/agent/grpc-middleware"
-	hcpclient "github.com/hashicorp/consul/agent/hcp/client"
-	hcpconfig "github.com/hashicorp/consul/agent/hcp/config"
 	"github.com/hashicorp/consul/agent/leafcert"
 	"github.com/hashicorp/consul/agent/metadata"
 	"github.com/hashicorp/consul/agent/rpc/middleware"
@@ -117,6 +114,83 @@ func waitForLeaderEstablishment(t *testing.T, servers ...*Server) {
 		}
 		require.True(r, hasLeader, "Cluster has not elected a leader yet")
 	})
+}
+
+func testServerConfigIPv6(t testutil.TestingTB) (string, *Config) {
+	dir := testutil.TempDir(t, "consul")
+	config := DefaultConfig()
+
+	ports := freeport.GetN(t, 4) // {server, serf_lan, serf_wan, grpc}
+	config.NodeName = uniqueNodeName(t.Name())
+	config.Bootstrap = true
+	config.Datacenter = "dc1"
+	config.PrimaryDatacenter = "dc1"
+	config.DataDir = dir
+
+	// bind the rpc server to a random port. config.RPCAdvertise will be
+	// set to the listen address unless it was set in the configuration.
+	// In that case get the address from srv.Listener.Addr().
+	config.RPCAddr = &net.TCPAddr{IP: []byte{127, 0, 0, 1}, Port: ports[0]}
+
+	nodeID, err := uuid.GenerateUUID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.NodeID = types.NodeID(nodeID)
+
+	// set the memberlist bind port to 0 to bind to a random port.
+	// memberlist will update the value of BindPort after bind
+	// to the actual value.
+	config.SerfLANConfig.MemberlistConfig.BindAddr = "::1"
+	config.SerfLANConfig.MemberlistConfig.BindPort = ports[1]
+	config.SerfLANConfig.MemberlistConfig.AdvertisePort = ports[1]
+	config.SerfLANConfig.MemberlistConfig.SuspicionMult = 2
+	config.SerfLANConfig.MemberlistConfig.ProbeTimeout = 50 * time.Millisecond
+	config.SerfLANConfig.MemberlistConfig.ProbeInterval = 100 * time.Millisecond
+	config.SerfLANConfig.MemberlistConfig.GossipInterval = 100 * time.Millisecond
+	config.SerfLANConfig.MemberlistConfig.DeadNodeReclaimTime = 100 * time.Millisecond
+
+	config.SerfWANConfig.MemberlistConfig.BindAddr = "::1"
+	config.SerfWANConfig.MemberlistConfig.BindPort = ports[2]
+	config.SerfWANConfig.MemberlistConfig.AdvertisePort = ports[2]
+	config.SerfWANConfig.MemberlistConfig.SuspicionMult = 2
+	config.SerfWANConfig.MemberlistConfig.ProbeTimeout = 50 * time.Millisecond
+	config.SerfWANConfig.MemberlistConfig.ProbeInterval = 100 * time.Millisecond
+	config.SerfWANConfig.MemberlistConfig.GossipInterval = 100 * time.Millisecond
+	config.SerfWANConfig.MemberlistConfig.DeadNodeReclaimTime = 100 * time.Millisecond
+
+	config.RaftConfig.LeaderLeaseTimeout = 100 * time.Millisecond
+	config.RaftConfig.HeartbeatTimeout = 200 * time.Millisecond
+	config.RaftConfig.ElectionTimeout = 200 * time.Millisecond
+
+	config.ReconcileInterval = 300 * time.Millisecond
+
+	config.AutopilotConfig.ServerStabilizationTime = 100 * time.Millisecond
+	config.ServerHealthInterval = 50 * time.Millisecond
+	config.AutopilotInterval = 100 * time.Millisecond
+
+	config.CoordinateUpdatePeriod = 100 * time.Millisecond
+	config.LeaveDrainTime = 1 * time.Millisecond
+
+	// TODO (slackpad) - We should be able to run all tests w/o this, but it
+	// looks like several depend on it.
+	config.RPCHoldTimeout = 10 * time.Second
+
+	config.GRPCPort = ports[3]
+
+	config.ConnectEnabled = true
+	config.CAConfig = &structs.CAConfiguration{
+		ClusterID: connect.TestClusterID,
+		Provider:  structs.ConsulCAProvider,
+		Config: map[string]interface{}{
+			"PrivateKey":          "",
+			"RootCert":            "",
+			"LeafCertTTL":         "72h",
+			"IntermediateCertTTL": "288h",
+		},
+	}
+	config.PeeringEnabled = true
+	return dir, config
 }
 
 func testServerConfig(t testutil.TestingTB) (string, *Config) {
@@ -885,18 +959,18 @@ func TestServer_JoinWAN_viaMeshGateway(t *testing.T) {
 	// Wait for it to make it into the gateway locator.
 	retry.Run(t, func(r *retry.R) {
 		require.NotEmpty(r, s1.gatewayLocator.PickGateway("dc1"))
-	})
+	}, retry.WithRetryer(retry.ThirtySeconds()))
 
 	// Seed the secondaries with the address of the primary and wait for that to
 	// be in their locators.
 	s2.RefreshPrimaryGatewayFallbackAddresses([]string{gwAddr})
 	retry.Run(t, func(r *retry.R) {
 		require.NotEmpty(r, s2.gatewayLocator.PickGateway("dc1"))
-	})
+	}, retry.WithRetryer(retry.ThirtySeconds()))
 	s3.RefreshPrimaryGatewayFallbackAddresses([]string{gwAddr})
 	retry.Run(t, func(r *retry.R) {
 		require.NotEmpty(r, s3.gatewayLocator.PickGateway("dc1"))
-	})
+	}, retry.WithRetryer(retry.ThirtySeconds()))
 
 	// Try to join from secondary to primary. We can't use joinWAN() because we
 	// are simulating proper bootstrapping and if ACLs were on we would have to
@@ -909,14 +983,14 @@ func TestServer_JoinWAN_viaMeshGateway(t *testing.T) {
 		if got, want := len(s2.WANMembers()), 2; got != want {
 			r.Fatalf("got %d s2 WAN members want %d", got, want)
 		}
-	})
+	}, retry.WithRetryer(retry.ThirtySeconds()))
 	_, err = s3.JoinWAN([]string{joinAddrWAN(s1)})
 	require.NoError(t, err)
 	retry.Run(t, func(r *retry.R) {
 		if got, want := len(s3.WANMembers()), 3; got != want {
 			r.Fatalf("got %d s3 WAN members want %d", got, want)
 		}
-	})
+	}, retry.WithRetryer(retry.ThirtySeconds()))
 
 	// Now we can register this into the catalog in dc2 and dc3.
 	{
@@ -964,7 +1038,7 @@ func TestServer_JoinWAN_viaMeshGateway(t *testing.T) {
 		require.NotEmpty(r, s3.gatewayLocator.PickGateway("dc3"))
 		require.NotEmpty(r, s2.gatewayLocator.PickGateway("dc3"))
 		require.NotEmpty(r, s1.gatewayLocator.PickGateway("dc3"))
-	})
+	}, retry.WithRetryer(retry.ThirtySeconds()))
 
 	// Try to join again using the standard verification method now that
 	// all of the plumbing is in place.
@@ -1202,6 +1276,146 @@ func TestServer_Leave(t *testing.T) {
 	retry.Run(t, func(r *retry.R) {
 		r.Check(wantPeers(s1, 1))
 		r.Check(wantPeers(s2, 1))
+	})
+}
+
+func TestServer_WANFlood_RejoinAfterGracefulLeave(t *testing.T) {
+	if testing.Short() {
+		t.Skip("too slow for testing.Short")
+	}
+
+	t.Parallel()
+
+	dir1, s1 := testServerWithConfig(t, func(c *Config) {
+		c.Bootstrap = true
+		c.NodeName = "server1"
+		c.Datacenter = "dc1"
+		c.SerfFloodInterval = 100 * time.Millisecond
+	})
+	defer os.RemoveAll(dir1)
+	defer s1.Shutdown()
+
+	dir2, s2 := testServerWithConfig(t, func(c *Config) {
+		c.Bootstrap = false
+		c.NodeName = "server2"
+		c.Datacenter = "dc1"
+		c.SerfFloodInterval = 100 * time.Millisecond
+	})
+	defer os.RemoveAll(dir2)
+
+	joinLAN(t, s2, s1)
+	testrpc.WaitForLeader(t, s1.RPC, "dc1")
+
+	wanNodeName := "server2.dc1"
+	wanStatus := func(s *Server, name string) (string, bool) {
+		for _, m := range s.WANMembers() {
+			if m.Name == name {
+				return m.Status.String(), true
+			}
+		}
+		return "", false
+	}
+
+	retry.Run(t, func(r *retry.R) {
+		status, ok := wanStatus(s1, wanNodeName)
+		require.True(r, ok, "expected WAN member to exist")
+		require.Equal(r, "alive", status)
+	})
+
+	require.NoError(t, s2.Leave())
+	s2.Shutdown()
+
+	retry.Run(t, func(r *retry.R) {
+		status, ok := wanStatus(s1, wanNodeName)
+		require.True(r, ok, "expected stale WAN member to remain visible")
+		require.NotEqual(r, "alive", status)
+	})
+
+	dir3, s2Rejoined := testServerWithConfig(t, func(c *Config) {
+		c.Bootstrap = false
+		c.NodeName = "server2"
+		c.Datacenter = "dc1"
+		c.SerfFloodInterval = 100 * time.Millisecond
+	})
+	defer os.RemoveAll(dir3)
+	defer s2Rejoined.Shutdown()
+
+	joinLAN(t, s2Rejoined, s1)
+
+	retry.Run(t, func(r *retry.R) {
+		status, ok := wanStatus(s1, wanNodeName)
+		require.True(r, ok, "expected WAN member to exist after rejoin")
+		require.Equal(r, "alive", status, "WAN member should heal back to alive after rejoin")
+	})
+}
+
+func TestServer_WANFlood_RejoinAfterFailure(t *testing.T) {
+	if testing.Short() {
+		t.Skip("too slow for testing.Short")
+	}
+
+	t.Parallel()
+
+	dir1, s1 := testServerWithConfig(t, func(c *Config) {
+		c.Bootstrap = true
+		c.NodeName = "server1"
+		c.Datacenter = "dc1"
+		c.SerfFloodInterval = 100 * time.Millisecond
+	})
+	defer os.RemoveAll(dir1)
+	defer s1.Shutdown()
+
+	dir2, s2 := testServerWithConfig(t, func(c *Config) {
+		c.Bootstrap = false
+		c.NodeName = "server2"
+		c.Datacenter = "dc1"
+		c.SerfFloodInterval = 100 * time.Millisecond
+	})
+	defer os.RemoveAll(dir2)
+
+	joinLAN(t, s2, s1)
+	testrpc.WaitForLeader(t, s1.RPC, "dc1")
+
+	wanNodeName := "server2.dc1"
+	wanStatus := func(s *Server, name string) (string, bool) {
+		for _, m := range s.WANMembers() {
+			if m.Name == name {
+				return m.Status.String(), true
+			}
+		}
+		return "", false
+	}
+
+	retry.Run(t, func(r *retry.R) {
+		status, ok := wanStatus(s1, wanNodeName)
+		require.True(r, ok, "expected WAN member to exist")
+		require.Equal(r, "alive", status)
+	})
+
+	// Abrupt shutdown to trigger failed/non-alive transitions.
+	s2.Shutdown()
+
+	retry.Run(t, func(r *retry.R) {
+		status, ok := wanStatus(s1, wanNodeName)
+		require.True(r, ok, "expected stale WAN member to remain visible")
+		require.NotEqual(r, "alive", status)
+	})
+
+	dir3, s2Rejoined := testServerWithConfig(t, func(c *Config) {
+		c.Bootstrap = false
+		c.NodeName = "server2"
+		c.Datacenter = "dc1"
+		c.SerfFloodInterval = 100 * time.Millisecond
+	})
+	defer os.RemoveAll(dir3)
+	defer s2Rejoined.Shutdown()
+
+	joinLAN(t, s2Rejoined, s1)
+
+	retry.Run(t, func(r *retry.R) {
+		status, ok := wanStatus(s1, wanNodeName)
+		require.True(r, ok, "expected WAN member to exist after rejoin")
+		require.Equal(r, "alive", status, "WAN member should heal back to alive after rejoin")
 	})
 }
 
@@ -1841,6 +2055,7 @@ func TestServer_ReloadConfig(t *testing.T) {
 		c.RequestLimitsReadRate = 500
 		c.RequestLimitsWriteRate = 500
 		c.RPCClientTimeout = 60 * time.Second
+		c.RPCMaxHeaderBytes = 512
 		// Set one raft param to be non-default in the initial config, others are
 		// default.
 		c.RaftConfig.TrailingLogs = 1234
@@ -1855,6 +2070,7 @@ func TestServer_ReloadConfig(t *testing.T) {
 	require.Equal(t, 5000, limiter.Burst())
 
 	require.Equal(t, 60*time.Second, s.connPool.RPCClientTimeout())
+	require.Equal(t, int64(512), s.rpcMaxHeaderBytes.Load())
 
 	rc := ReloadableConfig{
 		RequestLimits: &RequestLimits{
@@ -1865,6 +2081,7 @@ func TestServer_ReloadConfig(t *testing.T) {
 		RPCClientTimeout:     2 * time.Minute,
 		RPCRateLimit:         1000,
 		RPCMaxBurst:          10000,
+		RPCMaxHeaderBytes:    1024,
 		ConfigEntryBootstrap: []structs.ConfigEntry{entryInit},
 		// Reset the custom one to default be removing it from config file (it will
 		// be a zero value here).
@@ -1895,6 +2112,9 @@ func TestServer_ReloadConfig(t *testing.T) {
 	limiter = s.rpcLimiter.Load().(*rate.Limiter)
 	require.Equal(t, rate.Limit(1000), limiter.Limit())
 	require.Equal(t, 10000, limiter.Burst())
+
+	// Check the RPC header byte limit got updated
+	require.Equal(t, int64(1024), s.rpcMaxHeaderBytes.Load())
 
 	// Check the incoming RPC rate limiter got updated
 	mockHandler.AssertCalled(t, "UpdateConfig", rpcRate.HandlerConfig{
@@ -2090,209 +2310,6 @@ func TestServer_Peering_LeadershipCheck(t *testing.T) {
 	require.Equal(t, s1.config.RPCAddr.String(), peeringLeaderAddr)
 	// test corollary by transitivity to future-proof against any setup bugs
 	require.NotEqual(t, s2.config.RPCAddr.String(), peeringLeaderAddr)
-}
-
-func TestServer_hcpManager(t *testing.T) {
-	_, conf1 := testServerConfig(t)
-
-	// Configure the server for the StatusFn
-	conf1.BootstrapExpect = 1
-	conf1.RPCAdvertise = &net.TCPAddr{IP: []byte{127, 0, 0, 2}, Port: conf1.RPCAddr.Port}
-	conf1.Cloud.ClientID = "test-client-id"
-	conf1.Cloud.ResourceID = "test-resource-id"
-	conf1.Cloud.ClientSecret = "test-client-secret"
-	hcp1 := hcpclient.NewMockClient(t)
-	hcp1.EXPECT().PushServerStatus(mock.Anything, mock.MatchedBy(func(status *hcpclient.ServerStatus) bool {
-		return status.ID == string(conf1.NodeID)
-	})).Run(func(ctx context.Context, status *hcpclient.ServerStatus) {
-		require.Equal(t, status.LanAddress, "127.0.0.2")
-	}).Call.Return(nil)
-
-	// Configure the server for the ManagementTokenUpserterFn
-	conf1.ACLsEnabled = true
-
-	deps1 := newDefaultDeps(t, conf1)
-	s1, err := newServerWithDeps(t, conf1, deps1)
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	defer s1.Shutdown()
-	require.NotNil(t, s1.hcpManager)
-	waitForLeaderEstablishment(t, s1)
-
-	// Update the HCP manager and start it
-	token, err := uuid.GenerateUUID()
-	require.NoError(t, err)
-	s1.hcpManager.UpdateConfig(hcp1, hcpconfig.CloudConfig{
-		ManagementToken: token,
-	})
-	err = s1.hcpManager.Start(context.Background())
-	require.NoError(t, err)
-
-	// Validate that the server status pushed as expected
-	hcp1.AssertExpectations(t)
-
-	// Validate that the HCP token has been created as expected
-	retry.Run(t, func(r *retry.R) {
-		_, createdToken, err := s1.fsm.State().ACLTokenGetBySecret(nil, token, nil)
-		require.NoError(r, err)
-		require.NotNil(r, createdToken)
-	})
-
-	// Stop the HCP manager
-	err = s1.hcpManager.Stop()
-	require.NoError(t, err)
-
-	// Validate that the HCP token has been deleted as expected
-	retry.Run(t, func(r *retry.R) {
-		_, createdToken, err := s1.fsm.State().ACLTokenGetBySecret(nil, token, nil)
-		require.NoError(r, err)
-		require.Nil(r, createdToken)
-	})
-}
-
-func TestServer_addServerTLSInfo(t *testing.T) {
-	testCases := map[string]struct {
-		errMsg            string
-		setupConfigurator func(*testing.T) tlsutil.ConfiguratorIface
-		checkStatus       func(*testing.T, hcpclient.ServerStatus)
-	}{
-		"Success": {
-			setupConfigurator: func(t *testing.T) tlsutil.ConfiguratorIface {
-				tlsConfig := tlsutil.Config{
-					InternalRPC: tlsutil.ProtocolConfig{
-						CAFile:               "../../test/ca/root.cer",
-						CertFile:             "../../test/key/ourdomain_with_intermediate.cer",
-						KeyFile:              "../../test/key/ourdomain.key",
-						VerifyIncoming:       true,
-						VerifyOutgoing:       true,
-						VerifyServerHostname: true,
-					},
-				}
-
-				tlsConfigurator, err := tlsutil.NewConfigurator(tlsConfig, hclog.NewNullLogger())
-				require.NoError(t, err)
-				return tlsConfigurator
-			},
-			checkStatus: func(t *testing.T, s hcpclient.ServerStatus) {
-				expected := hcpclient.ServerTLSInfo{
-					Enabled:              true,
-					CertIssuer:           "test.internal",
-					CertName:             "testco.internal",
-					CertSerial:           "40",
-					CertExpiry:           time.Date(2123, time.October, 9, 17, 20, 16, 0, time.UTC),
-					VerifyIncoming:       true,
-					VerifyOutgoing:       true,
-					VerifyServerHostname: true,
-					CertificateAuthorities: []hcpclient.CertificateMetadata{
-						{ // manual ca pem
-							CertExpiry: time.Date(2033, time.October, 30, 15, 50, 29, 0, time.UTC),
-							CertName:   "test.internal",
-							CertSerial: "191297809789001034260919865367524695178070761520",
-						},
-						{ // certificate intermediate
-							CertExpiry: time.Date(2033, time.October, 30, 15, 50, 29, 0, time.UTC),
-							CertName:   "test.internal",
-							CertSerial: "191297809789001034260919865367524695178070761520",
-						},
-					},
-				}
-
-				require.Equal(t, expected, s.ServerTLSMetadata.InternalRPC)
-
-				// TODO: remove check for status.TLS once deprecation is ready
-				// https://hashicorp.atlassian.net/browse/CC-7015
-				require.Equal(t, expected, s.TLS)
-			},
-		},
-		"Nil Cert": {
-			setupConfigurator: func(t *testing.T) tlsutil.ConfiguratorIface {
-				tlsConfigurator, err := tlsutil.NewConfigurator(tlsutil.Config{},
-					hclog.NewNullLogger())
-				require.NoError(t, err)
-				return tlsConfigurator
-			},
-			checkStatus: func(t *testing.T, s hcpclient.ServerStatus) {
-				require.Empty(t, s.TLS)
-				require.Empty(t, s.ServerTLSMetadata.InternalRPC)
-			},
-		},
-		"Fail: No leaf": {
-			errMsg: "expected a leaf certificate",
-			setupConfigurator: func(t *testing.T) tlsutil.ConfiguratorIface {
-				return tlsutil.MockConfigurator{
-					TlsCert: &tls.Certificate{},
-				}
-			},
-		},
-		"Fail: Parse leaf cert": {
-			errMsg: "error parsing leaf cert",
-			setupConfigurator: func(t *testing.T) tlsutil.ConfiguratorIface {
-				return tlsutil.MockConfigurator{
-					TlsCert: &tls.Certificate{
-						Certificate: [][]byte{{}},
-					},
-				}
-			},
-		},
-		"Fail: Parse manual ca pems": {
-			errMsg: "error parsing manual ca pem",
-			setupConfigurator: func(t *testing.T) tlsutil.ConfiguratorIface {
-				tlsConfig := tlsutil.Config{
-					InternalRPC: tlsutil.ProtocolConfig{
-						CertFile: "../../test/key/ourdomain.cer",
-						KeyFile:  "../../test/key/ourdomain.key",
-					},
-				}
-				tlsConfigurator, err := tlsutil.NewConfigurator(tlsConfig, hclog.NewNullLogger())
-				require.NoError(t, err)
-
-				return tlsutil.MockConfigurator{
-					TlsCert:         tlsConfigurator.Cert(),
-					ManualCAPemsArr: []string{"invalid-format"},
-				}
-			},
-		},
-		"Fail: Parse tls cert intermediate": {
-			errMsg: "error parsing tls cert",
-			setupConfigurator: func(t *testing.T) tlsutil.ConfiguratorIface {
-				tlsConfig := tlsutil.Config{
-					InternalRPC: tlsutil.ProtocolConfig{
-						CertFile: "../../test/key/ourdomain.cer",
-						KeyFile:  "../../test/key/ourdomain.key",
-					},
-				}
-				tlsConfigurator, err := tlsutil.NewConfigurator(tlsConfig, hclog.NewNullLogger())
-				require.NoError(t, err)
-				cert := tlsConfigurator.Cert().Certificate
-				cert = append(cert, []byte{})
-				return tlsutil.MockConfigurator{
-					TlsCert: &tls.Certificate{
-						Certificate: cert,
-					},
-				}
-			},
-		},
-	}
-	for name, tc := range testCases {
-		t.Run(name, func(t *testing.T) {
-			require.NotNil(t, tc.setupConfigurator)
-			tlsConfigurator := tc.setupConfigurator(t)
-
-			status := hcpclient.ServerStatus{}
-			err := addServerTLSInfo(&status, tlsConfigurator)
-
-			if len(tc.errMsg) > 0 {
-				require.Error(t, err)
-				require.Contains(t, err.Error(), tc.errMsg)
-				require.Empty(t, status)
-			} else {
-				require.NoError(t, err)
-				require.NotNil(t, tc.checkStatus)
-				tc.checkStatus(t, status)
-			}
-		})
-	}
 }
 
 func TestServer_ControllerDependencies(t *testing.T) {

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 //go:build !consulent
@@ -58,6 +58,7 @@ func TestOperator_Usage(t *testing.T) {
 				"api-gateway":         0,
 				"connect-native":      1,
 				"connect-proxy":       1,
+				"inference-gateway":   0,
 				"ingress-gateway":     0,
 				"mesh-gateway":        0,
 				"terminating-gateway": 0,

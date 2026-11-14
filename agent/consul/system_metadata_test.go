@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package consul
@@ -6,9 +6,11 @@ package consul
 import (
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/hashicorp/consul/agent/consul/reporting"
 	"github.com/hashicorp/consul/agent/structs"
 	"github.com/hashicorp/consul/testrpc"
 )
@@ -36,10 +38,27 @@ func TestLeader_SystemMetadata_CRUD(t *testing.T) {
 
 	state := srv.fsm.State()
 
-	// Initially has no entries
+	filterEntries := func(entries []*structs.SystemMetadataEntry) []*structs.SystemMetadataEntry {
+		var filtered []*structs.SystemMetadataEntry
+		for _, entry := range entries {
+			switch entry.Key {
+			case reporting.SystemMetadataReportingProcessID,
+				structs.SystemMetadataFeatureGatesVersionKey:
+				continue
+			}
+			filtered = append(filtered, entry)
+		}
+		return filtered
+	}
+	require.Eventually(t, func() bool {
+		value, err := srv.GetSystemMetadata(structs.SystemMetadataFeatureGatesVersionKey)
+		return err == nil && value == structs.SystemMetadataFeatureGatesVersionValue
+	}, 5*time.Second, 25*time.Millisecond, "feature-gate framework version should be persisted")
+
+	// Initially has no user-managed entries
 	_, entries, err := state.SystemMetadataList(nil)
 	require.NoError(t, err)
-	require.Len(t, entries, 0)
+	require.Len(t, filterEntries(entries), 0)
 
 	// Create 3
 	require.NoError(t, srv.SetSystemMetadataKey("key1", "val1"))
@@ -56,13 +75,13 @@ func TestLeader_SystemMetadata_CRUD(t *testing.T) {
 
 	_, entries, err = state.SystemMetadataList(nil)
 	require.NoError(t, err)
-	require.Len(t, entries, 3)
+	require.Len(t, filterEntries(entries), 3)
 
 	require.Equal(t, map[string]string{
 		"key1": "val1",
 		"key2": "val2",
 		"key3": "",
-	}, mapify(entries))
+	}, mapify(filterEntries(entries)))
 
 	// Update one and delete one.
 	require.NoError(t, srv.SetSystemMetadataKey("key3", "val3"))
@@ -70,10 +89,10 @@ func TestLeader_SystemMetadata_CRUD(t *testing.T) {
 
 	_, entries, err = state.SystemMetadataList(nil)
 	require.NoError(t, err)
-	require.Len(t, entries, 2)
+	require.Len(t, filterEntries(entries), 2)
 
 	require.Equal(t, map[string]string{
 		"key2": "val2",
 		"key3": "val3",
-	}, mapify(entries))
+	}, mapify(filterEntries(entries)))
 }

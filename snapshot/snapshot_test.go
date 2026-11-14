@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package snapshot
@@ -108,10 +108,7 @@ func makeRaft(t *testing.T, dir string) (*raft.Raft, *MockFSM) {
 	}
 
 	timeout := time.After(10 * time.Second)
-	for {
-		if raft.Leader() != "" {
-			break
-		}
+	for raft.Leader() == "" {
 
 		select {
 		case <-raft.LeaderCh():

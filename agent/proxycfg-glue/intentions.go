@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package proxycfgglue
@@ -41,7 +41,7 @@ func (c cacheIntentions) Notify(ctx context.Context, req *structs.ServiceSpecifi
 			Type:    structs.IntentionMatchDestination,
 			Entries: []structs.IntentionMatchEntry{toIntentionMatchEntry(req)},
 		},
-		QueryOptions: structs.QueryOptions{Token: req.QueryOptions.Token},
+		QueryOptions: structs.QueryOptions{Token: req.Token},
 	}
 	return c.c.NotifyCallback(ctx, cachetype.IntentionMatchName, query, correlationID, func(ctx context.Context, event cache.UpdateEvent) {
 		var result any

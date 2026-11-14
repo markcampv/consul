@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package read
@@ -83,7 +83,7 @@ func (c *cmd) Run(args []string) int {
 				RequireConsistent: !c.http.Stale(),
 			}
 		} else {
-			c.UI.Error(fmt.Sprintf("Please provide an input file with resource definition"))
+			c.UI.Error("Please provide an input file with resource definition")
 			return 1
 		}
 	} else {

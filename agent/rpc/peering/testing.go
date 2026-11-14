@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package peering
@@ -36,6 +36,9 @@ not valid
 
 var validAddress = "1.2.3.4:80"
 var validHostnameAddress = "foo.bar.baz:80"
+var validIPv6Address = "[2001:db8::1]:80"
+var invalidIPv6Address = "[2001:db8::1:80]"
+var ipv6AddressWithoutPort = "2001:db8::1"
 
 var validServerName = "server.consul"
 

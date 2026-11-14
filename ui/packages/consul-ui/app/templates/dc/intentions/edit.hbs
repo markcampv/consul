@@ -4,7 +4,7 @@
 }}
 
 <Route
-  @name={{routeName}}
+  @name={{this.routeName}}
 as |route|>
   <DataLoader @src={{
     uri '/${partition}/${nspace}/${dc}/intention/${id}'
@@ -14,56 +14,46 @@ as |route|>
         dc=route.params.dc
         id=(or route.params.intention_id '')
       )
-    }}
-  as |loader|>
+    }}>
 
-    <BlockSlot @name="error">
+    <:error as |loader|>
         <AppError
           @error={{loader.error}}
           @login={{route.model.app.login.open}}
         />
-    </BlockSlot>
+    </:error>
 
-    <BlockSlot @name="loaded">
+    <:loaded as |loader|>
 {{#let
   loader.data
   (not (can "write intention" item=loader.data))
 as |item readOnly|}}
   <AppView>
-      <BlockSlot @name="breadcrumbs">
-          <ol>
-            <li><a data-test-back href={{href-to 'dc.intentions'}}>All Intentions</a></li>
-          </ol>
-      </BlockSlot>
-      <BlockSlot @name="header">
+      <:header>
           <h1>
   {{#if (not readOnly)}}
     {{#if item.ID}}
             <route.Title @title="Edit Intention" />
     {{else}}
-            <route.Title @title="New Intention" />
+            <route.Title @title="Create Intention" />
     {{/if}}
   {{else}}
             <route.Title @title="View Intention" />
   {{/if}}
           </h1>
-      </BlockSlot>
-      <BlockSlot @name="content">
+      </:header>
+      <:content>
         <Consul::Intention::Form
           @readonly={{readOnly}}
           @item={{item}}
           @dc={{route.model.dc}}
           @nspace={{route.params.nspace}}
           @partition={{route.params.partition}}
-          @onsubmit={{route-action 'transitionTo' 'dc.intentions.index'
-            (hash
-              dc=route.params.dc
-            )
-          }}
+          @onsubmit={{fn this.goToIndex route.params.dc}}
         />
-      </BlockSlot>
+      </:content>
   </AppView>
 {{/let}}
-  </BlockSlot>
+  </:loaded>
 </DataLoader>
 </Route>

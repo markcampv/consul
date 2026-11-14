@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 //go:build !consulent
@@ -61,13 +61,14 @@ func prefixIndexFromQueryWithPeerWildcardable(v Query) ([]byte, error) {
 	var b indexBuilder
 
 	peername := v.PeerOrEmpty()
-	if peername == "" {
+	switch peername {
+	case "":
 		b.String(strings.ToLower(structs.LocalPeerKeyword))
-	} else if peername == "*" {
+	case "*":
 		// use b.Raw so we don't add null terminator to prefix
 		b.Raw([]byte("peer:"))
 		return b.Bytes(), nil
-	} else {
+	default:
 		b.String(strings.ToLower("peer:" + peername))
 	}
 

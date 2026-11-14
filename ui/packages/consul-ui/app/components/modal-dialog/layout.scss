@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -58,7 +58,7 @@
   max-height: 80vh;
   padding: 20px 23px;
 }
-%modal-window > footer,
+%modal-window > .modal-dialog-footer,
 %modal-window > header {
   padding-top: 12px;
   padding-bottom: 10px;

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 //go:build !fips
 
@@ -92,6 +92,18 @@ func TestConfigurator_IncomingConfig_Common(t *testing.T) {
 
 				cipherSuite := tlsClient.ConnectionState().CipherSuite
 				require.Equal(t, tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384, cipherSuite)
+			})
+
+			t.Run("ECDHCurves", func(t *testing.T) {
+				cfg := ProtocolConfig{
+					ECDHCurves: []types.TLSECDHCurve{types.CurveX25519MLKEM768, types.CurveX25519},
+					CertFile:   "../test/hostname/Alice.crt",
+					KeyFile:    "../test/hostname/Alice.key",
+				}
+				c := makeConfigurator(t, tc.setupFn(cfg))
+
+				tlsConf := tc.configFn(c)
+				require.Equal(t, []tls.CurveID{tls.X25519MLKEM768, tls.X25519}, tlsConf.CurvePreferences)
 			})
 
 			t.Run("manually configured certificate is preferred over AutoTLS", func(t *testing.T) {
@@ -1692,11 +1704,6 @@ func certChain(t *testing.T, certs ...string) []*x509.Certificate {
 		result = append(result, cert)
 	}
 	return result
-}
-
-func startRPCTLSServer(t *testing.T, c *Configurator) (net.Conn, <-chan error) {
-	client, errc, _ := startTLSServer(c.IncomingRPCConfig())
-	return client, errc
 }
 
 func startALPNRPCTLSServer(t *testing.T, config *Config, alpnProtos []string) (net.Conn, <-chan error) {

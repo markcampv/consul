@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package agent
@@ -8,12 +8,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hashicorp/consul/ipaddr"
-
+	"github.com/hashicorp/consul/agent/netutil"
 	"github.com/hashicorp/consul/agent/structs"
+	"github.com/hashicorp/consul/ipaddr"
 )
 
-const sidecarIDSuffix = structs.SidecarProxySuffix
+const (
+	sidecarIDSuffix    = structs.SidecarProxySuffix
+	defaultIPv4Address = "127.0.0.1"
+	defaultIPv6Address = "::1"
+)
 
 func sidecarIDFromServiceID(serviceID string) string {
 	return serviceID + sidecarIDSuffix
@@ -115,6 +119,7 @@ func sidecarServiceFromNodeService(ns *structs.NodeService, token string) (*stru
 	if sidecar.Proxy.DestinationServiceID == "" {
 		sidecar.Proxy.DestinationServiceID = ns.ID
 	}
+	copyEnterpriseSidecarServicePorts(sidecar, ns)
 
 	// Fill defaults from NodeService if none of the address components are present.
 	// This really argues for a refactoring to a more generalized 'address' concept.
@@ -123,10 +128,15 @@ func sidecarServiceFromNodeService(ns *structs.NodeService, token string) (*stru
 			sidecar.Proxy.LocalServiceSocketPath = ns.SocketPath
 		} else {
 			if sidecar.Proxy.LocalServiceAddress == "" {
-				sidecar.Proxy.LocalServiceAddress = "127.0.0.1"
+				dualStack, _ := netutil.IsDualStack(nil, true)
+				if dualStack {
+					sidecar.Proxy.LocalServiceAddress = defaultIPv6Address
+				} else {
+					sidecar.Proxy.LocalServiceAddress = defaultIPv4Address
+				}
 			}
 			if sidecar.Proxy.LocalServicePort < 1 {
-				sidecar.Proxy.LocalServicePort = ns.Port
+				sidecar.Proxy.LocalServicePort = ns.DefaultPort()
 			}
 		}
 	}

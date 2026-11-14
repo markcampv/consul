@@ -33,6 +33,12 @@
               }
             ],
             "tlsParams": {
+              "ecdhCurves": [
+                "X25519MLKEM768",
+                "X25519",
+                "P-256"
+              ],
+              "tlsMaximumProtocolVersion": "TLSv1_3",
               "tlsMinimumProtocolVersion": "TLSv1_3"
             },
             "validationContext": {
@@ -82,6 +88,12 @@
               }
             ],
             "tlsParams": {
+              "ecdhCurves": [
+                "X25519MLKEM768",
+                "X25519",
+                "P-256"
+              ],
+              "tlsMaximumProtocolVersion": "TLSv1_3",
               "tlsMinimumProtocolVersion": "TLSv1_3"
             },
             "validationContext": {

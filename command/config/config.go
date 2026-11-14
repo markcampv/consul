@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package config
@@ -95,7 +95,7 @@ func KindSpecificWriteWarning(reqEntry api.ConfigEntry) string {
 			return WarningProxyDefaultsPermissiveMTLS
 		}
 	case *api.MeshConfigEntry:
-		if req.AllowEnablingPermissiveMutualTLS == true {
+		if req.AllowEnablingPermissiveMutualTLS {
 			return WarningMeshAllowEnablingPermissiveMutualTLS
 		}
 	}

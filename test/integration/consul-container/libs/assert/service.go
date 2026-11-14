@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package assert
@@ -6,8 +6,10 @@ package assert
 import (
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -89,9 +91,15 @@ func CatalogNodeDoesNotExist(t *testing.T, c *api.Client, nodeName string) {
 
 // CatalogServiceIsHealthy verifies the service name exists and all instances pass healthchecks
 func CatalogServiceIsHealthy(t *testing.T, c *api.Client, svc string, opts *api.QueryOptions) {
+	CatalogServiceIsHealthyWithTimer(t, c, svc, opts, retry.DefaultRetryer())
+}
+
+// CatalogServiceIsHealthyWithTimer is CatalogServiceIsHealthy with a caller-supplied
+// retry timer, for services whose checks need longer than the default to pass.
+func CatalogServiceIsHealthyWithTimer(t *testing.T, c *api.Client, svc string, opts *api.QueryOptions, timer retry.Retryer) {
 	CatalogServiceExists(t, c, svc, opts)
 
-	retry.Run(t, func(r *retry.R) {
+	retry.RunWith(timer, t, func(r *retry.R) {
 		services, _, err := c.Health().Service(svc, "", false, opts)
 		if err != nil {
 			r.Fatal("error reading service health data")
@@ -135,7 +143,7 @@ func HTTPServiceEchoesResHeaderWithClient(t *testing.T, client *http.Client, add
 // in the response body. Optional path can be provided to differentiate requests.
 func doHTTPServiceEchoes(t *testing.T, ip string, port int, path string, requestHeaders map[string]string, expectedResHeader map[string]string) {
 	client := cleanhttp.DefaultClient()
-	addr := fmt.Sprintf("%s:%d", ip, port)
+	addr := net.JoinHostPort(ip, strconv.Itoa(port))
 	doHTTPServiceEchoesWithClient(t, client, addr, path, requestHeaders, expectedResHeader)
 }
 

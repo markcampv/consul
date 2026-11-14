@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 //go:build !consulent
@@ -47,9 +47,7 @@ func (s *Server) handleEnterpriseNativeTLSConn(alpnProto string, conn net.Conn) 
 	return false
 }
 
-func (s *Server) handleEnterpriseLeave() {
-	return
-}
+func (s *Server) handleEnterpriseLeave() {}
 
 func (s *Server) establishEnterpriseLeadership(_ context.Context) error {
 	return nil

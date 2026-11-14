@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 syntax = "proto3";
@@ -12,7 +12,7 @@ service OperatorService {
   //Transfer raft leadership to another node
   rpc TransferLeader(TransferLeaderRequest) returns (TransferLeaderResponse) {
     option (hashicorp.consul.internal.ratelimit.spec) = {
-      operation_type: OPERATION_TYPE_EXEMPT,
+      operation_type: OPERATION_TYPE_EXEMPT
       operation_category: OPERATION_CATEGORY_OPERATOR
     };
   }

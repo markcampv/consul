@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package agent
@@ -65,6 +65,16 @@ func (a *Agent) vetServiceRegisterWithAuthorizer(authz acl.Authorizer, service *
 		service.FillAuthzContext(&authzContext)
 		if err := authz.ToAllowAuthorizer().ServiceWriteAllowed(service.Proxy.DestinationServiceName, &authzContext); err != nil {
 			return err
+		}
+	}
+
+	// Escape-hatch keys in Proxy.Config or Proxy.Upstreams[*].Config embed
+	// arbitrary Envoy JSON into the sidecar's bootstrap configuration or xDS
+	// listener/cluster resources. They can introduce code-executing HTTP
+	// filters and therefore require mesh:write independently of service:write.
+	if service.Proxy.HasEnvoyEscapeHatchOverride() {
+		if err := authz.ToAllowAuthorizer().MeshWriteAllowed(&authzContext); err != nil {
+			return fmt.Errorf("mesh:write required to set an Envoy escape-hatch key in Proxy.Config or Proxy.Upstreams[*].Config: %w", err)
 		}
 	}
 

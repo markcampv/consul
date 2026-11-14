@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package build
@@ -40,7 +40,7 @@ ARG DATAPLANE_IMAGE
 ARG CONSUL_IMAGE
 FROM ${CONSUL_IMAGE} AS consul
 FROM ${DATAPLANE_IMAGE} AS distroless
-FROM debian:bullseye-slim
+FROM debian:bookworm-slim
 
 # undo the distroless aspect
 COPY --from=distroless /usr/local/bin/discover /usr/local/bin/
@@ -50,9 +50,9 @@ COPY --from=distroless /licenses/copyright.txt /licenses/
 
 COPY --from=consul /bin/consul /bin/
 
-# Install iptables and sudo, needed for tproxy.
+# Install nftables and sudo, needed for tproxy.
 RUN apt update -y \
-	&& apt install -y iptables sudo curl dnsutils
+	&& apt install -y nftables sudo curl dnsutils
 
 RUN sed '/_apt/d' /etc/passwd > /etc/passwd.new \
     && mv -f /etc/passwd.new /etc/passwd \

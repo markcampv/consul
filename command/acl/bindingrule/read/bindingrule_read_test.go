@@ -1,10 +1,9 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package bindingruleread
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 
@@ -124,7 +123,7 @@ func TestBindingRuleReadCommand(t *testing.T) {
 		require.Empty(t, ui.ErrorWriter.String())
 
 		output := ui.OutputWriter.String()
-		require.Contains(t, output, fmt.Sprintf("test rule"))
+		require.Contains(t, output, "test rule")
 		require.Contains(t, output, id)
 	})
 
@@ -145,7 +144,7 @@ func TestBindingRuleReadCommand(t *testing.T) {
 		require.Empty(t, ui.ErrorWriter.String())
 
 		output := ui.OutputWriter.String()
-		require.Contains(t, output, fmt.Sprintf("test rule"))
+		require.Contains(t, output, "test rule")
 		require.Contains(t, output, id)
 	})
 
@@ -167,7 +166,7 @@ func TestBindingRuleReadCommand(t *testing.T) {
 		require.Empty(t, ui.ErrorWriter.String())
 
 		output := ui.OutputWriter.String()
-		require.Contains(t, output, fmt.Sprintf("test rule"))
+		require.Contains(t, output, "test rule")
 		require.Contains(t, output, id)
 	})
 }

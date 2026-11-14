@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package proxy
@@ -14,14 +14,16 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/mitchellh/cli"
+
+	"github.com/hashicorp/go-hclog"
 
 	"github.com/hashicorp/consul/api"
 	"github.com/hashicorp/consul/command/flags"
 	proxyImpl "github.com/hashicorp/consul/connect/proxy"
-	"github.com/hashicorp/go-hclog"
-
 	"github.com/hashicorp/consul/logging"
-	"github.com/mitchellh/cli"
 )
 
 func New(ui cli.Ui, shutdownCh <-chan struct{}) *cmd {
@@ -48,18 +50,19 @@ type cmd struct {
 	logger hclog.Logger
 
 	// flags
-	logLevel    string
-	logJSON     bool
-	cfgFile     string
-	proxyID     string
-	sidecarFor  string
-	pprofAddr   string
-	service     string
-	serviceAddr string
-	upstreams   map[string]proxyImpl.UpstreamConfig
-	listen      string
-	register    bool
-	registerId  string
+	logLevel     string
+	logJSON      bool
+	cfgFile      string
+	proxyID      string
+	sidecarFor   string
+	pprofAddr    string
+	pprofTimeout time.Duration
+	service      string
+	serviceAddr  string
+	upstreams    map[string]proxyImpl.UpstreamConfig
+	listen       string
+	register     bool
+	registerId   string
 
 	// test flags
 	testNoStart bool // don't start the proxy, just exit 0
@@ -86,6 +89,10 @@ func (c *cmd) init() {
 	c.flags.StringVar(&c.pprofAddr, "pprof-addr", "",
 		"Enable debugging via pprof. Providing a host:port (or just ':port') "+
 			"enables profiling HTTP endpoints on that address.")
+
+	c.flags.DurationVar(&c.pprofTimeout, "pprof-timeout", 30*time.Second,
+		"Timeout for pprof HTTP server operations. This includes read, write, "+
+			"and idle timeouts to prevent slowloris attacks.")
 
 	c.flags.StringVar(&c.service, "service", "",
 		"Name of the service this proxy is representing.")
@@ -121,7 +128,7 @@ func (c *cmd) Run(args []string) int {
 		return 1
 	}
 	if len(c.flags.Args()) > 0 {
-		c.UI.Error(fmt.Sprintf("Should have no non-flag arguments."))
+		c.UI.Error("Should have no non-flag arguments.")
 		return 1
 	}
 
@@ -153,8 +160,23 @@ func (c *cmd) Run(args []string) int {
 	if c.pprofAddr != "" {
 		go func() {
 			c.UI.Output(fmt.Sprintf("Starting pprof HTTP endpoints on "+
-				"http://%s/debug/pprof", c.pprofAddr))
-			log.Fatal(http.ListenAndServe(c.pprofAddr, nil))
+				"http://%s/debug/pprof (timeout: %v)", c.pprofAddr, c.pprofTimeout))
+
+			// Use minimum timeout values for security while respecting user configuration
+			readTimeout := c.pprofTimeout
+			if readTimeout < 1*time.Second {
+				readTimeout = 1 * time.Second
+			}
+
+			server := &http.Server{
+				Addr:              c.pprofAddr,
+				Handler:           nil,
+				ReadHeaderTimeout: readTimeout / 3, // Use 1/3 of total timeout for headers
+				ReadTimeout:       readTimeout,
+				WriteTimeout:      readTimeout,
+				IdleTimeout:       readTimeout * 4, // Idle can be longer
+			}
+			log.Fatal(server.ListenAndServe())
 		}()
 	}
 
@@ -346,12 +368,12 @@ func (c *cmd) configWatcher(client *api.Client) (proxyImpl.ConfigWatcher, error)
 					"knows the backend service address.")
 		}
 
-		c.UI.Info(fmt.Sprintf("   Public listener: %s:%d => %s", host, port, c.serviceAddr))
+		c.UI.Info(fmt.Sprintf("   Public listener: %s => %s", net.JoinHostPort(host, strconv.Itoa(port)), c.serviceAddr))
 		listener.BindAddress = host
 		listener.BindPort = port
 		listener.LocalServiceAddress = c.serviceAddr
 	} else {
-		c.UI.Info(fmt.Sprintf("   Public listener: Disabled"))
+		c.UI.Info("   Public listener: Disabled")
 	}
 
 	return proxyImpl.NewStaticConfigWatcher(&proxyImpl.Config{

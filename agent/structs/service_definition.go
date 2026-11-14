@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package structs
@@ -23,6 +23,7 @@ type ServiceDefinition struct {
 	TaggedAddresses   map[string]ServiceAddress
 	Meta              map[string]string
 	Port              int
+	Ports             ServicePorts
 	SocketPath        string
 	Check             CheckType
 	Checks            CheckTypes
@@ -41,6 +42,12 @@ type ServiceDefinition struct {
 	acl.EnterpriseMeta `hcl:",squash" mapstructure:",squash"`
 
 	Connect *ServiceConnect
+
+	// AI is the inline AI role block (CAMP). It registers the service's AI
+	// semantics (inference-model, mcp-server, or ai-agent) alongside the
+	// normal service definition. Optional; nil when the service is not an AI
+	// workload.
+	AI *ServiceAI `json:",omitempty"`
 }
 
 func (t *ServiceDefinition) UnmarshalJSON(data []byte) (err error) {
@@ -76,13 +83,15 @@ func (s *ServiceDefinition) NodeService() *NodeService {
 		Address:           s.Address,
 		Meta:              s.Meta,
 		Port:              s.Port,
+		Ports:             s.Ports,
 		SocketPath:        s.SocketPath,
 		Weights:           s.Weights,
 		EnableTagOverride: s.EnableTagOverride,
 		EnterpriseMeta:    s.EnterpriseMeta,
 		Locality:          s.Locality,
+		AI:                s.AI,
 	}
-	ns.EnterpriseMeta.Normalize()
+	ns.Normalize()
 
 	if s.Connect != nil {
 		ns.Connect = *s.Connect
@@ -98,10 +107,10 @@ func (s *ServiceDefinition) NodeService() *NodeService {
 			// If a proxy's namespace and partition are not defined, inherit from the proxied service
 			// Applicable only to Consul Enterprise.
 			if ns.Proxy.Upstreams[i].DestinationNamespace == "" {
-				ns.Proxy.Upstreams[i].DestinationNamespace = ns.EnterpriseMeta.NamespaceOrEmpty()
+				ns.Proxy.Upstreams[i].DestinationNamespace = ns.NamespaceOrEmpty()
 			}
 			if ns.Proxy.Upstreams[i].DestinationPartition == "" {
-				ns.Proxy.Upstreams[i].DestinationPartition = ns.EnterpriseMeta.PartitionOrEmpty()
+				ns.Proxy.Upstreams[i].DestinationPartition = ns.PartitionOrEmpty()
 			}
 		}
 		ns.Proxy.Expose = s.Proxy.Expose
@@ -117,6 +126,7 @@ func (s *ServiceDefinition) NodeService() *NodeService {
 
 		ns.TaggedAddresses = taggedAddrs
 	}
+
 	return ns
 }
 

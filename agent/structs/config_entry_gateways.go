@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package structs
@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -22,6 +23,8 @@ import (
 
 const (
 	wildcardPrefix = "*."
+
+	defaultGatewayCredentialMessageTimeout = "250ms"
 )
 
 // IngressGatewayConfigEntry manages the configuration for an ingress service
@@ -198,8 +201,8 @@ func (e *IngressGatewayConfigEntry) Normalize() error {
 
 		listener.Protocol = strings.ToLower(listener.Protocol)
 		for i := range listener.Services {
-			listener.Services[i].EnterpriseMeta.Merge(&e.EnterpriseMeta)
-			listener.Services[i].EnterpriseMeta.Normalize()
+			listener.Services[i].Merge(&e.EnterpriseMeta)
+			listener.Services[i].Normalize()
 		}
 
 		// Make sure to set the item back into the array, since we are not using
@@ -287,8 +290,19 @@ func (e *IngressGatewayConfigEntry) validateServiceSDS(lis IngressListener, svc 
 	return nil
 }
 
-func validateGatewayTLSConfig(tlsCfg GatewayTLSConfig) error {
-	return validateTLSConfig(tlsCfg.TLSMinVersion, tlsCfg.TLSMaxVersion, tlsCfg.CipherSuites)
+func validateGatewayTLSConfig(tlsCfg GatewayTLSConfig, inheritedSDSClusterSet bool, scope string) error {
+	if err := validateTLSConfig(tlsCfg.TLSMinVersion, tlsCfg.TLSMaxVersion, tlsCfg.CipherSuites); err != nil {
+		return err
+	}
+
+	if tlsCfg.SDS != nil && tlsCfg.SDS.ClusterName == "" && tlsCfg.SDS.CertResource != "" && !inheritedSDSClusterSet {
+		if scope == "" {
+			return fmt.Errorf("TLS.SDS.ClusterName is required if CertResource is set")
+		}
+		return fmt.Errorf("TLS.SDS.ClusterName is required if CertResource is set (%s)", scope)
+	}
+
+	return nil
 }
 
 func (e *IngressGatewayConfigEntry) Validate() error {
@@ -296,7 +310,7 @@ func (e *IngressGatewayConfigEntry) Validate() error {
 		return err
 	}
 
-	if err := validateGatewayTLSConfig(e.TLS); err != nil {
+	if err := validateGatewayTLSConfig(e.TLS, false, "gateway"); err != nil {
 		return err
 	}
 
@@ -329,7 +343,7 @@ func (e *IngressGatewayConfigEntry) Validate() error {
 		}
 
 		if listener.TLS != nil {
-			if err := validateGatewayTLSConfig(*listener.TLS); err != nil {
+			if err := validateGatewayTLSConfig(*listener.TLS, e.TLS.SDS != nil && e.TLS.SDS.ClusterName != "", fmt.Sprintf("listener on port %d", listener.Port)); err != nil {
 				return err
 			}
 		}
@@ -441,7 +455,7 @@ func (e *IngressGatewayConfigEntry) ListRelatedServices() []ServiceID {
 		out = append(out, svc)
 	}
 	sort.Slice(out, func(i, j int) bool {
-		return out[i].EnterpriseMeta.LessThan(&out[j].EnterpriseMeta) ||
+		return out[i].LessThan(&out[j].EnterpriseMeta) ||
 			out[i].ID < out[j].ID
 	})
 	return out
@@ -482,9 +496,10 @@ func (s *IngressService) ToServiceName() ServiceName {
 // TerminatingGatewayConfigEntry manages the configuration for a terminating service
 // with the given name.
 type TerminatingGatewayConfigEntry struct {
-	Kind     string
-	Name     string
-	Services []LinkedService
+	Kind                string
+	Name                string
+	Services            []LinkedService
+	CredentialInjection *GatewayCredentialInjection `json:",omitempty" alias:"credential_injection"`
 
 	Meta               map[string]string `json:",omitempty"`
 	Hash               uint64            `json:",omitempty" hash:"ignore"`
@@ -498,6 +513,20 @@ func (e *TerminatingGatewayConfigEntry) SetHash(h uint64) {
 
 func (e *TerminatingGatewayConfigEntry) GetHash() uint64 {
 	return e.Hash
+}
+
+// GatewayCredentialInjection configures the local credential processor for a
+// terminating gateway. It contains no credential material or credential source.
+type GatewayCredentialInjection struct {
+	UDSPath        string `json:",omitempty" alias:"uds_path"`
+	MessageTimeout string `json:",omitempty" alias:"message_timeout"`
+}
+
+// GatewayServiceCredential configures the credential policy for one linked
+// terminating-gateway service.
+type GatewayServiceCredential struct {
+	Mode      string `json:",omitempty"`
+	BindingID string `json:",omitempty" alias:"binding_id"`
 }
 
 // A LinkedService is a service represented by a terminating gateway
@@ -522,6 +551,9 @@ type LinkedService struct {
 
 	//DisableAutoHostRewrite disables terminating gateways auto host rewrite feature when set to true.
 	DisableAutoHostRewrite bool `json:",omitempty"`
+
+	// Credential configures non-secret credential injection for this service.
+	Credential *GatewayServiceCredential `json:",omitempty"`
 
 	acl.EnterpriseMeta `hcl:",squash" mapstructure:",squash"`
 }
@@ -553,9 +585,13 @@ func (e *TerminatingGatewayConfigEntry) Normalize() error {
 	e.Kind = TerminatingGateway
 	e.EnterpriseMeta.Normalize()
 
+	if e.CredentialInjection != nil && e.CredentialInjection.MessageTimeout == "" {
+		e.CredentialInjection.MessageTimeout = defaultGatewayCredentialMessageTimeout
+	}
+
 	for i := range e.Services {
-		e.Services[i].EnterpriseMeta.Merge(&e.EnterpriseMeta)
-		e.Services[i].EnterpriseMeta.Normalize()
+		e.Services[i].Merge(&e.EnterpriseMeta)
+		e.Services[i].Normalize()
 	}
 
 	h, err := HashConfigEntry(e)
@@ -572,7 +608,6 @@ func (e *TerminatingGatewayConfigEntry) Validate() error {
 	}
 
 	seen := make(map[ServiceID]bool)
-
 	for _, svc := range e.Services {
 		if svc.Name == "" {
 			return fmt.Errorf("Service name cannot be blank.")
@@ -598,12 +633,13 @@ func (e *TerminatingGatewayConfigEntry) Validate() error {
 		// If either client cert config file was specified then the CA file, client cert, and key file must be specified
 		// Specifying only a CAFile is allowed for one-way TLS
 		if (svc.CertFile != "" || svc.KeyFile != "") &&
-			!(svc.CAFile != "" && svc.CertFile != "" && svc.KeyFile != "") {
+			(svc.CAFile == "" || svc.CertFile == "" || svc.KeyFile == "") {
 
 			return fmt.Errorf("Service %q must have a CertFile, CAFile, and KeyFile specified for TLS origination", svc.Name)
 		}
 	}
-	return nil
+
+	return e.validateCredentialInjection()
 }
 
 func (e *TerminatingGatewayConfigEntry) CanRead(authz acl.Authorizer) error {
@@ -660,18 +696,20 @@ const (
 
 // GatewayService is used to associate gateways with their linked services.
 type GatewayService struct {
-	Gateway      ServiceName
-	Service      ServiceName
-	GatewayKind  ServiceKind
-	Port         int                `json:",omitempty"`
-	Protocol     string             `json:",omitempty"`
-	Hosts        []string           `json:",omitempty"`
-	CAFile       string             `json:",omitempty"`
-	CertFile     string             `json:",omitempty"`
-	KeyFile      string             `json:",omitempty"`
-	SNI          string             `json:",omitempty"`
-	FromWildcard bool               `json:",omitempty"`
-	ServiceKind  GatewayServiceKind `json:",omitempty"`
+	Gateway             ServiceName
+	Service             ServiceName
+	GatewayKind         ServiceKind
+	Port                int                         `json:",omitempty"`
+	Protocol            string                      `json:",omitempty"`
+	Hosts               []string                    `json:",omitempty"`
+	CAFile              string                      `json:",omitempty"`
+	CertFile            string                      `json:",omitempty"`
+	KeyFile             string                      `json:",omitempty"`
+	SNI                 string                      `json:",omitempty"`
+	FromWildcard        bool                        `json:",omitempty"`
+	ServiceKind         GatewayServiceKind          `json:",omitempty"`
+	CredentialInjection *GatewayCredentialInjection `json:",omitempty"`
+	Credential          *GatewayServiceCredential   `json:",omitempty"`
 	RaftIndex
 	AutoHostRewrite bool `json:",omitempty"`
 }
@@ -711,11 +749,13 @@ func (g *GatewayService) IsSame(o *GatewayService) bool {
 		g.KeyFile == o.KeyFile &&
 		g.SNI == o.SNI &&
 		g.ServiceKind == o.ServiceKind &&
-		g.FromWildcard == o.FromWildcard
+		g.FromWildcard == o.FromWildcard &&
+		equalGatewayCredentialInjection(g.CredentialInjection, o.CredentialInjection) &&
+		equalGatewayServiceCredential(g.Credential, o.Credential)
 }
 
 func (g *GatewayService) Clone() *GatewayService {
-	return &GatewayService{
+	clone := &GatewayService{
 		Gateway:     g.Gateway,
 		Service:     g.Service,
 		GatewayKind: g.GatewayKind,
@@ -732,6 +772,25 @@ func (g *GatewayService) Clone() *GatewayService {
 		ServiceKind:     g.ServiceKind,
 		AutoHostRewrite: g.AutoHostRewrite,
 	}
+	if g.CredentialInjection != nil {
+		credentialInjection := *g.CredentialInjection
+		clone.CredentialInjection = &credentialInjection
+	}
+	if g.Credential != nil {
+		credential := *g.Credential
+		clone.Credential = &credential
+	}
+	return clone
+}
+
+func equalGatewayCredentialInjection(a, b *GatewayCredentialInjection) bool {
+	return (a == nil && b == nil) ||
+		(a != nil && b != nil && *a == *b)
+}
+
+func equalGatewayServiceCredential(a, b *GatewayServiceCredential) bool {
+	return (a == nil && b == nil) ||
+		(a != nil && b != nil && *a == *b)
 }
 
 // APIGatewayConfigEntry manages the configuration for an API gateway service
@@ -744,9 +803,28 @@ type APIGatewayConfigEntry struct {
 	// service. This should match the name provided in the service definition.
 	Name string
 
+	// TLS holds default TLS configuration for API gateway listeners. Listener
+	// TLS settings may override these defaults.
+	TLS GatewayTLSConfig
+
 	// Listeners is the set of listener configuration to which an API Gateway
 	// might bind.
 	Listeners []APIGatewayListener
+
+	// Defaults contains default upstream limits for all route destination services.
+	Defaults *UpstreamLimits `json:",omitempty"`
+
+	// ExtAuthz is the gateway-wide external authorization toggle. It controls the
+	// default ext_authz posture for every endpoint behind this gateway when the
+	// builtin/ext-authz EnvoyExtension is applied via service-defaults. When nil
+	// (omitted) ext_authz is enabled by default; when set with Enabled=false the
+	// filter defaults to disabled and routes must opt in individually. Per-route
+	// http-route ExtAuthz filters take precedence over this toggle.
+	//
+	// APIGatewayExtAuthz is an enterprise-only type: it is an empty struct in CE
+	// and carries its fields only in the enterprise build (see
+	// config_entry_apigw_extauthz_{ce,ent}.go).
+	ExtAuthz *APIGatewayExtAuthz `json:",omitempty"`
 
 	// Status is the asynchronous status which an APIGateway propagates to the user.
 	Status Status
@@ -806,8 +884,8 @@ func (e *APIGatewayConfigEntry) Normalize() error {
 			if cert.Kind == "" {
 				cert.Kind = InlineCertificate
 			}
-			cert.EnterpriseMeta.Merge(e.GetEnterpriseMeta())
-			cert.EnterpriseMeta.Normalize()
+			cert.Merge(e.GetEnterpriseMeta())
+			cert.Normalize()
 
 			listener.TLS.Certificates[i] = cert
 		}
@@ -824,6 +902,15 @@ func (e *APIGatewayConfigEntry) Normalize() error {
 func (e *APIGatewayConfigEntry) Validate() error {
 	if err := validateConfigEntryMeta(e.Meta); err != nil {
 		return err
+	}
+	if err := validateGatewayTLSConfig(e.TLS, false, "gateway"); err != nil {
+		return err
+	}
+
+	if e.Defaults != nil {
+		if err := e.Defaults.Validate(); err != nil {
+			return err
+		}
 	}
 
 	if len(e.Listeners) == 0 {
@@ -869,17 +956,21 @@ func (e *APIGatewayConfigEntry) validateMergedListeners() error {
 
 func (e *APIGatewayConfigEntry) validateListeners() error {
 	validProtocols := map[APIGatewayListenerProtocol]bool{
-		ListenerProtocolHTTP: true,
-		ListenerProtocolTCP:  true,
+		ListenerProtocolHTTP:  true,
+		ListenerProtocolTCP:   true,
+		ListenerProtocolHTTP2: true,
+		ListenerProtocolGRPC:  true,
 	}
 	allowedCertificateKinds := map[string]bool{
 		FileSystemCertificate: true,
 		InlineCertificate:     true,
 	}
 
+	gwSDSClusterSet := e.TLS.SDS != nil && e.TLS.SDS.ClusterName != ""
+
 	for _, listener := range e.Listeners {
 		if !validProtocols[listener.Protocol] {
-			return fmt.Errorf("unsupported listener protocol %q, must be one of 'tcp', or 'http'", listener.Protocol)
+			return fmt.Errorf("unsupported listener protocol %q, must be one of 'tcp', 'http', 'http2', or 'grpc'", listener.Protocol)
 		}
 		if listener.Protocol == ListenerProtocolTCP && listener.Hostname != "" {
 			// TODO: once we have SNI matching we should be able to implement this
@@ -897,6 +988,18 @@ func (e *APIGatewayConfigEntry) validateListeners() error {
 			}
 			if certificate.Name == "" {
 				return fmt.Errorf("certificate reference must have a name")
+			}
+		}
+		if listener.TLS.SDS != nil {
+			sds := listener.TLS.SDS
+			if sds.ClusterName == "" && sds.CertResource != "" && !gwSDSClusterSet {
+				return fmt.Errorf("TLS.SDS.ClusterName is required if CertResource is set (listener %q)", listener.Name)
+			}
+			if sds.ClusterName != "" && sds.CertResource == "" {
+				return fmt.Errorf("TLS.SDS.CertResource is required if ClusterName is set (listener %q)", listener.Name)
+			}
+			if len(listener.TLS.Certificates) > 0 {
+				return fmt.Errorf("listener %q cannot specify both TLS.Certificates and TLS.SDS", listener.Name)
 			}
 		}
 		if err := validateTLSConfig(listener.TLS.MinVersion, listener.TLS.MaxVersion, listener.TLS.CipherSuites); err != nil {
@@ -922,9 +1025,22 @@ func (e *APIGatewayConfigEntry) CanWrite(authz acl.Authorizer) error {
 type APIGatewayListenerProtocol string
 
 const (
-	ListenerProtocolHTTP APIGatewayListenerProtocol = "http"
-	ListenerProtocolTCP  APIGatewayListenerProtocol = "tcp"
+	ListenerProtocolHTTP  APIGatewayListenerProtocol = "http"
+	ListenerProtocolTCP   APIGatewayListenerProtocol = "tcp"
+	ListenerProtocolHTTP2 APIGatewayListenerProtocol = "http2"
+	ListenerProtocolGRPC  APIGatewayListenerProtocol = "grpc"
 )
+
+// APIGatewayListenerProtocolsCompatible reports whether a route (or discovery
+// chain) of protocol b can be served by a listener of protocol a. HTTP, HTTP/2
+// and gRPC are all L7/HTTP-like and are mutually compatible for routing; tcp is
+// only compatible with tcp.
+func APIGatewayListenerProtocolsCompatible(a, b APIGatewayListenerProtocol) bool {
+	if IsProtocolHTTPLike(string(a)) && IsProtocolHTTPLike(string(b)) {
+		return true
+	}
+	return a == b
+}
 
 // APIGatewayListener represents an individual listener for an APIGateway
 type APIGatewayListener struct {
@@ -937,7 +1053,7 @@ type APIGatewayListener struct {
 	// Port is the port at which this listener should bind.
 	Port int
 	// Protocol is the protocol that a listener should use. It must
-	// either be http or tcp.
+	// be one of http, tcp, http2, or grpc.
 	Protocol APIGatewayListenerProtocol
 	// TLS is the TLS settings for the listener.
 	TLS APIGatewayTLSConfiguration
@@ -946,6 +1062,10 @@ type APIGatewayListener struct {
 	Override *APIGatewayPolicy `json:",omitempty"`
 	// Default is the policy that is the default for the listener and route, routes can override this behavior
 	Default *APIGatewayPolicy `json:",omitempty"`
+
+	// MaxRequestHeadersKB configures the maximum size in kilobytes for request headers
+	// sent from downstream clients to upstream services. If not set, uses Envoy's default.
+	MaxRequestHeadersKB *uint32 `json:",omitempty"`
 }
 
 // APIGatewayPolicy holds the policy that configures the gateway listener, this is used in the `Override` and `Default` fields of a listener
@@ -967,6 +1087,8 @@ type APIGatewayTLSConfiguration struct {
 	// Certificates is a set of references to certificates
 	// that a gateway listener uses for TLS termination.
 	Certificates []ResourceReference
+	// SDS allows configuring TLS certificate from an SDS service.
+	SDS *GatewayTLSSDSConfig `json:",omitempty"`
 	// MaxVersion is the maximum TLS version that the listener
 	// should support.
 	MaxVersion types.TLSVersion
@@ -979,13 +1101,13 @@ type APIGatewayTLSConfiguration struct {
 
 // IsEmpty returns true if all values in the struct are nil or empty.
 func (a *APIGatewayTLSConfiguration) IsEmpty() bool {
-	return len(a.Certificates) == 0 && len(a.MaxVersion) == 0 && len(a.MinVersion) == 0 && len(a.CipherSuites) == 0
+	return len(a.Certificates) == 0 && a.SDS == nil && len(a.MaxVersion) == 0 && len(a.MinVersion) == 0 && len(a.CipherSuites) == 0
 }
 
 func (a *APIGatewayTLSConfiguration) ToGatewayTLSConfig() GatewayTLSConfig {
 	return GatewayTLSConfig{
 		Enabled:       true,
-		SDS:           nil,
+		SDS:           a.SDS,
 		TLSMinVersion: a.MinVersion,
 		TLSMaxVersion: a.MaxVersion,
 		CipherSuites:  a.CipherSuites,
@@ -1140,14 +1262,14 @@ func (e *BoundAPIGatewayConfigEntry) GetMeta() map[string]string { return e.Meta
 func (e *BoundAPIGatewayConfigEntry) Normalize() error {
 	for i, listener := range e.Listeners {
 		for j, route := range listener.Routes {
-			route.EnterpriseMeta.Merge(&e.EnterpriseMeta)
-			route.EnterpriseMeta.Normalize()
+			route.Merge(&e.EnterpriseMeta)
+			route.Normalize()
 
 			listener.Routes[j] = route
 		}
 		for j, cert := range listener.Certificates {
-			cert.EnterpriseMeta.Merge(&e.EnterpriseMeta)
-			cert.EnterpriseMeta.Normalize()
+			cert.Merge(&e.EnterpriseMeta)
+			cert.Normalize()
 
 			listener.Certificates[j] = cert
 		}
@@ -1234,10 +1356,48 @@ func (e *BoundAPIGatewayConfigEntry) ListRelatedServices() []ServiceID {
 
 // BoundAPIGatewayListener is an API gateway listener with information
 // about the routes and certificates that have successfully bound to it.
+// It also carries the listener configuration fields from the parent
+// APIGatewayListener so that consumers only need to hold a single struct.
 type BoundAPIGatewayListener struct {
-	Name         string
-	Routes       []ResourceReference
+	Name   string
+	Routes []ResourceReference
+	// Certificates is the set of inline/filesystem certificates that have
+	// been validated and bound to this listener by the controller.
 	Certificates []ResourceReference
+
+	// The following fields are copied from the corresponding APIGatewayListener
+	// when the controller reconciles. Changes on the parent listener are
+	// propagated here on the next reconcile; see BoundAPIGatewayListener.IsSame.
+	Hostname            string
+	Port                int
+	Protocol            APIGatewayListenerProtocol
+	TLS                 APIGatewayTLSConfiguration
+	Override            *APIGatewayPolicy `json:",omitempty"`
+	Default             *APIGatewayPolicy `json:",omitempty"`
+	MaxRequestHeadersKB *uint32           `json:",omitempty"`
+}
+
+// SetConfigFromListener copies the configuration fields of the given
+// APIGatewayListener onto the bound listener, leaving the bound state (routes
+// and certificates) untouched. Every code path that materializes a
+// BoundAPIGatewayListener must funnel through here so the copied fields cannot
+// drift from their parent listener.
+func (l *BoundAPIGatewayListener) SetConfigFromListener(listener APIGatewayListener) {
+	l.Hostname = listener.Hostname
+	l.Port = listener.Port
+	l.Protocol = listener.Protocol
+	l.TLS = listener.TLS
+	l.Override = listener.Override
+	l.Default = listener.Default
+	l.MaxRequestHeadersKB = listener.MaxRequestHeadersKB
+}
+
+// GetHostname returns the hostname for the listener, or "*" if unspecified.
+func (l BoundAPIGatewayListener) GetHostname() string {
+	if l.Hostname != "" {
+		return l.Hostname
+	}
+	return "*"
 }
 
 func sameResources(first, second []ResourceReference) bool {
@@ -1266,7 +1426,63 @@ func (l BoundAPIGatewayListener) IsSame(other BoundAPIGatewayListener) bool {
 	if !sameResources(l.Certificates, other.Certificates) {
 		return false
 	}
+	if !l.sameConfig(other) {
+		return false
+	}
 	return sameResources(l.Routes, other.Routes)
+}
+
+// sameConfig compares the listener configuration fields that are copied from
+// the parent APIGatewayListener. These must participate in IsSame so that an
+// edit to the APIGateway config entry which only changes listener
+// configuration (leaving routes and certificates untouched) is still persisted
+// to the bound entry by the reconciler.
+func (l BoundAPIGatewayListener) sameConfig(other BoundAPIGatewayListener) bool {
+	if l.Hostname != other.Hostname ||
+		l.Port != other.Port ||
+		l.Protocol != other.Protocol {
+		return false
+	}
+	if !l.TLS.isSame(&other.TLS) {
+		return false
+	}
+	if !l.Override.isSame(other.Override) || !l.Default.isSame(other.Default) {
+		return false
+	}
+	return pointerValuesEqual(l.MaxRequestHeadersKB, other.MaxRequestHeadersKB)
+}
+
+func pointerValuesEqual[T comparable](first, second *T) bool {
+	if first == nil || second == nil {
+		return first == second
+	}
+	return *first == *second
+}
+
+func (a *APIGatewayTLSConfiguration) isSame(other *APIGatewayTLSConfiguration) bool {
+	if a == nil || other == nil {
+		return a == other
+	}
+	if a.MaxVersion != other.MaxVersion || a.MinVersion != other.MinVersion {
+		return false
+	}
+	if !slices.Equal(a.CipherSuites, other.CipherSuites) {
+		return false
+	}
+	if !sameResources(a.Certificates, other.Certificates) {
+		return false
+	}
+	if a.SDS == nil || other.SDS == nil {
+		return a.SDS == other.SDS
+	}
+	return *a.SDS == *other.SDS
+}
+
+func (p *APIGatewayPolicy) isSame(other *APIGatewayPolicy) bool {
+	if p == nil || other == nil {
+		return p == other
+	}
+	return reflect.DeepEqual(p.JWT, other.JWT)
 }
 
 // BindRoute is used to create or update a route on the listener.

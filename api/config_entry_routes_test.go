@@ -4,10 +4,45 @@
 package api
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+// TestAPI_HTTPRoute_ExtProcOverridesJSONRoundTrip ensures the ext_proc override
+// gRPC initial metadata survives a JSON marshal/unmarshal through the public API
+// type, so a client that reads and rewrites a route does not silently drop a
+// configured credential binding.
+func TestAPI_HTTPRoute_ExtProcOverridesJSONRoundTrip(t *testing.T) {
+	src := &HTTPRouteConfigEntry{
+		Kind: HTTPRoute,
+		Name: "camp-credential-binding",
+		Rules: []HTTPRouteRule{{
+			Filters: HTTPFilters{
+				ExtProc: []ExtProcFilter{{
+					Mode: "override",
+					Overrides: &ExtProcOverrides{
+						GRPCInitialMetadata: []ExtProcMetadataKV{{
+							Key:   "x-camp-auth-binding",
+							Value: "openai-a",
+						}},
+					},
+				}},
+			},
+		}},
+	}
+
+	encoded, err := json.Marshal(src)
+	require.NoError(t, err)
+
+	var decoded HTTPRouteConfigEntry
+	require.NoError(t, json.Unmarshal(encoded, &decoded))
+
+	require.Equal(t,
+		src.Rules[0].Filters.ExtProc[0].Overrides.GRPCInitialMetadata,
+		decoded.Rules[0].Filters.ExtProc[0].Overrides.GRPCInitialMetadata)
+}
 
 func TestAPI_ConfigEntries_HTTPRoute(t *testing.T) {
 	t.Parallel()
@@ -18,6 +53,18 @@ func TestAPI_ConfigEntries_HTTPRoute(t *testing.T) {
 	route1 := &HTTPRouteConfigEntry{
 		Kind: HTTPRoute,
 		Name: "route1",
+		Rules: []HTTPRouteRule{
+			{
+				Services: []HTTPService{
+					{
+						Name: "svc1",
+						Limits: &UpstreamLimits{
+							MaxConnections: intPointer(111),
+						},
+					},
+				},
+			},
+		},
 	}
 
 	route2 := &HTTPRouteConfigEntry{
@@ -50,6 +97,8 @@ func TestAPI_ConfigEntries_HTTPRoute(t *testing.T) {
 	require.Equal(t, route1.Name, readRoute.Name)
 	require.Equal(t, route1.Meta, readRoute.Meta)
 	require.Equal(t, route1.Meta, readRoute.GetMeta())
+	require.NotNil(t, readRoute.Rules[0].Services[0].Limits)
+	require.Equal(t, *route1.Rules[0].Services[0].Limits.MaxConnections, *readRoute.Rules[0].Services[0].Limits.MaxConnections)
 
 	// update it
 	route1.Rules = []HTTPRouteRule{

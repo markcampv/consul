@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package gateways
@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/go-connections/nat"
 	"github.com/stretchr/testify/require"
 
 	"github.com/hashicorp/consul/api"
+	"github.com/hashicorp/consul/sdk/testutil/retry"
 	libassert "github.com/hashicorp/consul/test/integration/consul-container/libs/assert"
 	libcluster "github.com/hashicorp/consul/test/integration/consul-container/libs/cluster"
 	libservice "github.com/hashicorp/consul/test/integration/consul-container/libs/service"
@@ -65,7 +65,8 @@ func TestIngressGateway(t *testing.T) {
 	// We check this is healthy here because in the case of bringing up a new kube cluster,
 	// it is not possible to create the config entry in advance.
 	// The health checks must pass so the pod can start up.
-	libassert.CatalogServiceIsHealthy(t, apiClient, api.IngressGateway, nil)
+	// The ingress gateway's TCP check runs every 10s, longer than the default retry timeout.
+	libassert.CatalogServiceIsHealthyWithTimer(t, apiClient, api.IngressGateway, nil, retry.ThirtySeconds())
 
 	// Register a service to the ingress gateway
 	// **NOTE**: We intentionally wait until after the gateway starts to create the config entry.
@@ -98,12 +99,12 @@ func TestIngressGateway(t *testing.T) {
 	libassert.AssertContainerState(t, ingressService, "running")
 	libassert.AssertContainerState(t, serverService, "running")
 
-	mappedPort, err := clientNode.GetPod().MappedPort(context.Background(), nat.Port(fmt.Sprintf("%d/tcp", gatewayListenerPort)))
+	mappedPort, err := clientNode.GetPod().MappedPort(context.Background(), fmt.Sprintf("%d/tcp", gatewayListenerPort))
 	require.NoError(t, err)
 
 	// by default, ingress routes are set per <service>.ingress.*
 	headers := map[string]string{"Host": fmt.Sprintf("%s.ingress.com", libservice.StaticServerServiceName)}
-	libassert.HTTPServiceEchoesWithHeaders(t, "localhost", mappedPort.Int(), "", headers)
+	libassert.HTTPServiceEchoesWithHeaders(t, "localhost", int(mappedPort.Num()), "", headers)
 }
 
 func checkIngressConfigEntry(t *testing.T, client *api.Client, gatewayName string, opts *api.QueryOptions) {

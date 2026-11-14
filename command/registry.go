@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package command
@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+
+	mcli "github.com/mitchellh/cli"
 
 	"github.com/hashicorp/consul/command/acl"
 	aclagent "github.com/hashicorp/consul/command/acl/agenttokens"
@@ -52,6 +54,7 @@ import (
 	catlistdc "github.com/hashicorp/consul/command/catalog/list/dc"
 	catlistnodes "github.com/hashicorp/consul/command/catalog/list/nodes"
 	catlistsvc "github.com/hashicorp/consul/command/catalog/list/services"
+	"github.com/hashicorp/consul/command/cli"
 	"github.com/hashicorp/consul/command/config"
 	configdelete "github.com/hashicorp/consul/command/config/delete"
 	configlist "github.com/hashicorp/consul/command/config/list"
@@ -99,12 +102,17 @@ import (
 	operautoget "github.com/hashicorp/consul/command/operator/autopilot/get"
 	operautoset "github.com/hashicorp/consul/command/operator/autopilot/set"
 	operautostate "github.com/hashicorp/consul/command/operator/autopilot/state"
+	operfeature "github.com/hashicorp/consul/command/operator/feature"
+	operfeatureget "github.com/hashicorp/consul/command/operator/feature/get"
+	operfeaturelist "github.com/hashicorp/consul/command/operator/feature/list"
+	operfeatureset "github.com/hashicorp/consul/command/operator/feature/set"
 	operraft "github.com/hashicorp/consul/command/operator/raft"
 	operraftlist "github.com/hashicorp/consul/command/operator/raft/listpeers"
 	operraftremove "github.com/hashicorp/consul/command/operator/raft/removepeer"
 	"github.com/hashicorp/consul/command/operator/raft/transferleader"
 	"github.com/hashicorp/consul/command/operator/usage"
 	"github.com/hashicorp/consul/command/operator/usage/instances"
+	operutil "github.com/hashicorp/consul/command/operator/utilization"
 	"github.com/hashicorp/consul/command/peering"
 	peerdelete "github.com/hashicorp/consul/command/peering/delete"
 	peerestablish "github.com/hashicorp/consul/command/peering/establish"
@@ -127,6 +135,7 @@ import (
 	svcsderegister "github.com/hashicorp/consul/command/services/deregister"
 	svcsexport "github.com/hashicorp/consul/command/services/export"
 	exportedservices "github.com/hashicorp/consul/command/services/exportedservices"
+	importedservices "github.com/hashicorp/consul/command/services/importedservices"
 	svcsregister "github.com/hashicorp/consul/command/services/register"
 	"github.com/hashicorp/consul/command/snapshot"
 	snapdecode "github.com/hashicorp/consul/command/snapshot/decode"
@@ -145,10 +154,6 @@ import (
 	"github.com/hashicorp/consul/command/validate"
 	"github.com/hashicorp/consul/command/version"
 	"github.com/hashicorp/consul/command/watch"
-
-	mcli "github.com/mitchellh/cli"
-
-	"github.com/hashicorp/consul/command/cli"
 )
 
 // RegisteredCommands returns a realized mapping of available CLI commands in a format that
@@ -246,12 +251,17 @@ func RegisteredCommands(ui cli.Ui) map[string]mcli.CommandFactory {
 		entry{"operator autopilot get-config", func(ui cli.Ui) (cli.Command, error) { return operautoget.New(ui), nil }},
 		entry{"operator autopilot set-config", func(ui cli.Ui) (cli.Command, error) { return operautoset.New(ui), nil }},
 		entry{"operator autopilot state", func(ui cli.Ui) (cli.Command, error) { return operautostate.New(ui), nil }},
+		entry{"operator feature", func(cli.Ui) (cli.Command, error) { return operfeature.New(), nil }},
+		entry{"operator feature get", func(ui cli.Ui) (cli.Command, error) { return operfeatureget.New(ui), nil }},
+		entry{"operator feature list", func(ui cli.Ui) (cli.Command, error) { return operfeaturelist.New(ui), nil }},
+		entry{"operator feature set", func(ui cli.Ui) (cli.Command, error) { return operfeatureset.New(ui), nil }},
 		entry{"operator raft", func(cli.Ui) (cli.Command, error) { return operraft.New(), nil }},
 		entry{"operator raft list-peers", func(ui cli.Ui) (cli.Command, error) { return operraftlist.New(ui), nil }},
 		entry{"operator raft remove-peer", func(ui cli.Ui) (cli.Command, error) { return operraftremove.New(ui), nil }},
 		entry{"operator raft transfer-leader", func(ui cli.Ui) (cli.Command, error) { return transferleader.New(ui), nil }},
 		entry{"operator usage", func(ui cli.Ui) (cli.Command, error) { return usage.New(), nil }},
 		entry{"operator usage instances", func(ui cli.Ui) (cli.Command, error) { return instances.New(ui), nil }},
+		entry{"operator utilization", func(ui cli.Ui) (cli.Command, error) { return operutil.New(ui), nil }},
 		entry{"peering", func(cli.Ui) (cli.Command, error) { return peering.New(), nil }},
 		entry{"peering delete", func(ui cli.Ui) (cli.Command, error) { return peerdelete.New(ui), nil }},
 		entry{"peering exported-services", func(ui cli.Ui) (cli.Command, error) { return peerexported.New(ui), nil }},
@@ -276,6 +286,7 @@ func RegisteredCommands(ui cli.Ui) map[string]mcli.CommandFactory {
 		entry{"services deregister", func(ui cli.Ui) (cli.Command, error) { return svcsderegister.New(ui), nil }},
 		entry{"services export", func(ui cli.Ui) (cli.Command, error) { return svcsexport.New(ui), nil }},
 		entry{"services exported-services", func(ui cli.Ui) (cli.Command, error) { return exportedservices.New(ui), nil }},
+		entry{"services imported-services", func(ui cli.Ui) (cli.Command, error) { return importedservices.New(ui), nil }},
 		entry{"snapshot", func(cli.Ui) (cli.Command, error) { return snapshot.New(), nil }},
 		entry{"snapshot decode", func(ui cli.Ui) (cli.Command, error) { return snapdecode.New(ui), nil }},
 		entry{"snapshot inspect", func(ui cli.Ui) (cli.Command, error) { return snapinspect.New(ui), nil }},

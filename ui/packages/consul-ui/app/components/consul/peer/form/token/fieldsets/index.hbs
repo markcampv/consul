@@ -1,0 +1,32 @@
+{{!
+  Copyright (c) HashiCorp, Inc.
+  SPDX-License-Identifier: BUSL-1.1
+}}
+
+{{! Copy token step: presented as an Hds::Modal by the caller (the peer
+    create page for a fresh token, the Regenerate token modal for an
+    existing one) so the still-filled-in form stays visible behind it, per
+    Figma's "Copy token" overlay. }}
+<ol>
+  <li>
+    <strong>Copy the token</strong><br />
+    This token cannot be viewed again after creation.
+    <br />
+    <Hds::Copy::Snippet
+      @textToCopy={{@token}}
+      @color="secondary"
+      @isTruncated={{true}}
+      @isFullWidth={{true}}
+      data-test-peering-token
+    />
+  </li>
+  <li>
+    <strong>Switch to the peer</strong><br />
+    Someone on your team should log into the Datacenter (Community) or Admin Partition (Enterprise) that you want this one to connect with.
+  </li>
+  <li>
+    <strong>Initiate the peering</strong><br />
+    From there, initiate a new peering, name it, and paste this token in.
+  </li>
+</ol>
+

@@ -20,6 +20,8 @@ Include any links here that might be helpful for people reviewing your PR (Ticke
 
 Please be mindful not to leak any customer or confidential information. HashiCorp employees may want to use our internal URL shortener to obfuscate links.
 
+**HashiCorp employees:** do not include internal Jira ticket IDs anywhere in this PR description or in changed source files. Internal ticket references are not meaningful to the community and are automatically detected and blocked by CI. Use public GitHub issue links instead.
+
 -->
 
 ### PR Checklist
@@ -28,3 +30,15 @@ Please be mindful not to leak any customer or confidential information. HashiCor
 * [ ] external facing docs updated
 * [ ] appropriate backport labels added
 * [ ] not a security concern
+
+## PCI review checklist
+
+<!-- heimdall_github_prtemplate:grc-pci_dss-2024-01-05 -->
+
+- [ ] I have documented a clear reason for, and description of, the change I am making.
+
+- [ ] If applicable, I've documented a plan to revert these changes if they require more than reverting the pull request.
+
+- [ ] If applicable, I've documented the impact of any changes to security controls.
+
+  Examples of changes to security controls include using new access control methods, adding or removing logging pipelines, etc.

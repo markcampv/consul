@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package cluster
@@ -10,13 +10,13 @@ import (
 	"io"
 
 	jsonpatch "github.com/evanphx/json-patch"
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/hashicorp/consul/api"
-	"github.com/hashicorp/consul/lib/decode"
 	"github.com/hashicorp/hcl"
-	"github.com/mitchellh/mapstructure"
 	"github.com/testcontainers/testcontainers-go"
 	"google.golang.org/grpc"
 
+	"github.com/hashicorp/consul/test/integration/consul-container/libs/decode"
 	"github.com/hashicorp/consul/test/integration/consul-container/libs/utils"
 )
 

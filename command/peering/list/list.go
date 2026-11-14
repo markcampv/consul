@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package list
@@ -88,7 +88,7 @@ func (c *cmd) Run(args []string) int {
 	}
 
 	if len(res) == 0 {
-		c.UI.Info(fmt.Sprintf("There are no peering connections."))
+		c.UI.Info("There are no peering connections.")
 		return 0
 	}
 

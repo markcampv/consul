@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 // package oidcauthtest exposes tools to assist in writing unit tests of OIDC
@@ -55,6 +55,7 @@ type Server struct {
 	customAudience    string
 	omitIDToken       bool
 	disableUserInfo   bool
+	disableEndSession bool
 }
 
 type TestingT interface {
@@ -73,7 +74,8 @@ func Start(t TestingT) *Server {
 			"https://example.com",
 		},
 		replySubject: "r3qXcK2bix9eFECzsU3Sbmh0K16fatW6@clients",
-		replyUserinfo: map[string]interface{}{
+		replyUserinfo: map[string]any{
+			"sub":         "r3qXcK2bix9eFECzsU3Sbmh0K16fatW6@clients",
 			"color":       "red",
 			"temperature": "76",
 			"flavor":      "umami",
@@ -113,6 +115,12 @@ func (s *Server) SetExpectedAuthCode(code string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.expectedAuthCode = code
+}
+
+func (s *Server) SetUserInfo(info map[string]any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.replyUserinfo = info
 }
 
 // SetExpectedAuthNonce configures the nonce value required for /auth.
@@ -163,6 +171,16 @@ func (s *Server) DisableUserInfo() {
 	s.disableUserInfo = true
 }
 
+// DisableEndSession omits the end_session_endpoint from the discovery config,
+// simulating an identity provider that does not support OIDC RP-Initiated
+// logout. Must be called before the authenticator is created,
+// since the discovery document is fetched and cached at that time.
+func (s *Server) DisableEndSession() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.disableEndSession = true
+}
+
 // Stop stops the running Server.
 func (s *Server) Stop() {
 	s.httpServer.Close()
@@ -184,7 +202,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 
 	switch req.URL.Path {
 	case "/.well-known/openid-configuration":
@@ -194,20 +212,25 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		}
 
 		reply := struct {
-			Issuer           string `json:"issuer"`
-			AuthEndpoint     string `json:"authorization_endpoint"`
-			TokenEndpoint    string `json:"token_endpoint"`
-			JWKSURI          string `json:"jwks_uri"`
-			UserinfoEndpoint string `json:"userinfo_endpoint,omitempty"`
+			Issuer             string `json:"issuer"`
+			AuthEndpoint       string `json:"authorization_endpoint"`
+			TokenEndpoint      string `json:"token_endpoint"`
+			JWKSURI            string `json:"jwks_uri"`
+			UserinfoEndpoint   string `json:"userinfo_endpoint,omitempty"`
+			EndSessionEndpoint string `json:"end_session_endpoint,omitempty"`
 		}{
-			Issuer:           s.Addr(),
-			AuthEndpoint:     s.Addr() + "/auth",
-			TokenEndpoint:    s.Addr() + "/token",
-			JWKSURI:          s.Addr() + "/certs",
-			UserinfoEndpoint: s.Addr() + "/userinfo",
+			Issuer:             s.Addr(),
+			AuthEndpoint:       s.Addr() + "/auth",
+			TokenEndpoint:      s.Addr() + "/token",
+			JWKSURI:            s.Addr() + "/certs",
+			UserinfoEndpoint:   s.Addr() + "/userinfo",
+			EndSessionEndpoint: s.Addr() + "/logout",
 		}
 		if s.disableUserInfo {
 			reply.UserinfoEndpoint = ""
+		}
+		if s.disableEndSession {
+			reply.EndSessionEndpoint = ""
 		}
 
 		if err := writeJSON(w, &reply); err != nil {
@@ -285,13 +308,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 		switch {
 		case req.FormValue("grant_type") != "authorization_code":
-			_ = writeTokenErrorResponse(w, req, http.StatusBadRequest, "invalid_request", "bad grant_type")
+			_ = writeTokenErrorResponse(w, http.StatusBadRequest, "invalid_request", "bad grant_type")
 			return
 		case !strutil.StrListContains(s.allowedRedirectURIs, req.FormValue("redirect_uri")):
-			_ = writeTokenErrorResponse(w, req, http.StatusBadRequest, "invalid_request", "redirect_uri is not allowed")
+			_ = writeTokenErrorResponse(w, http.StatusBadRequest, "invalid_request", "redirect_uri is not allowed")
 			return
 		case req.FormValue("code") != s.expectedAuthCode:
-			_ = writeTokenErrorResponse(w, req, http.StatusUnauthorized, "invalid_grant", "unexpected auth code")
+			_ = writeTokenErrorResponse(w, http.StatusUnauthorized, "invalid_grant", "unexpected auth code")
 			return
 		}
 
@@ -308,7 +331,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 		jwtData, err := SignJWT("", stdClaims, s.customClaims)
 		if err != nil {
-			_ = writeTokenErrorResponse(w, req, http.StatusInternalServerError, "server_error", err.Error())
+			_ = writeTokenErrorResponse(w, http.StatusInternalServerError, "server_error", err.Error())
 			return
 		}
 
@@ -359,7 +382,7 @@ func writeAuthErrorResponse(w http.ResponseWriter, req *http.Request, errorCode,
 	http.Redirect(w, req, redirectURI, http.StatusFound)
 }
 
-func writeTokenErrorResponse(w http.ResponseWriter, req *http.Request, statusCode int, errorCode, errorMessage string) error {
+func writeTokenErrorResponse(w http.ResponseWriter, statusCode int, errorCode, errorMessage string) error {
 	body := struct {
 		Code string `json:"error"`
 		Desc string `json:"error_description,omitempty"`

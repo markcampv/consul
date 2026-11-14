@@ -1,11 +1,10 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 import RepositoryService from 'consul-ui/services/repository';
 import isFolder from 'consul-ui/utils/isFolder';
-import { get } from '@ember/object';
 import { PRIMARY_KEY } from 'consul-ui/models/kv';
 // import { ACCESS_LIST } from 'consul-ui/abilities/base';
 import dataSource from 'consul-ui/decorators/data-source';
@@ -21,7 +20,21 @@ export default class KvService extends RepositoryService {
   }
 
   shouldReconcile(item, params) {
-    return super.shouldReconcile(...arguments) && item.Key.startsWith(params.id);
+    if (!super.shouldReconcile(...arguments)) {
+      return false;
+    }
+    const key = item.Key || '';
+    // `params.id` is already normalized to '' for the root by findAllBySlug
+    const id = params.id === '/' ? '' : params.id || '';
+    if (!key.startsWith(id)) {
+      return false;
+    }
+    // `kvs/:id` is a separator='/' listing, so it only ever holds the immediate
+    // children of :id and reconcile has to be scoped to that same level. A
+    // plain prefix test let the root listing (id '') match every KV in the
+    // store and evict records other listings had just loaded.
+    const rest = key.slice(id.length).replace(/\/$/, '');
+    return rest !== '' && !rest.includes('/');
   }
 
   // this one gives you the full object so key,values and meta
@@ -84,7 +97,7 @@ export default class KvService extends RepositoryService {
     //   async () => {
     let items = await this.findAll(...arguments);
     const meta = items.meta;
-    items = items.filter((item) => params.id !== get(item, 'Key'));
+    items = items.filter((item) => params.id !== item.Key);
     items.meta = meta;
     return items;
     // },

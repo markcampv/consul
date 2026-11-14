@@ -1,41 +1,50 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 %hashicorp-consul {
+  /* Make the Consul logo in the AppHeader white to contrast against the
+     dark header surface. The monochrome 'consul' icon uses currentColor,
+     so we set color on the home-link element. */
+  .hds-app-header__home-link {
+    color: #ffffff;
+  }
+
+  /* HDS's 32px icon wrapper leaves 8px of slack beside the 16px glyph while the
+     chevron gets 2px before the border. Shrink the wrapper to its glyph and pad
+     the button evenly; 9px preserves the original 56x36 footprint. */
+  .hds-app-header__utility-actions .hds-dropdown-toggle-icon {
+    padding: 9px;
+
+    .hds-dropdown-toggle-icon__wrapper {
+      width: 16px;
+      height: 16px;
+    }
+  }
+
+  .hds-app-side-nav {
+    height: 100%;
+    min-height: 100%;
+  }
+
   .consul-side-nav {
+    .hds-app-side-nav__wrapper-body {
+      display: flex;
+      flex-direction: column;
+      /* allow the nav body to scroll independently of the main content; without
+         min-height:0 a flex column item won't shrink below its content height */
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+
     li.consul-disabled-nav {
       width: 100%;
-      min-height: var(--token-side-nav-body-list-item-height);
-      padding: var(--token-side-nav-body-list-item-padding-vertical)
-        var(--token-side-nav-body-list-item-padding-horizontal);
-      color: var(--token-color-foreground-disabled);
-    }
-
-    li.consul-side-nav__selector {
-      .consul-side-nav__selector-toggle {
-        min-width: 15.5rem;
-
-        &:disabled {
-          color: var(--token-color-foreground-disabled);
-          border-color: var(--token-color-border-primary);
-
-          &:hover {
-            background-color: transparent;
-          }
-        }
-      }
-
-      .hds-dropdown__content {
-        min-width: 15.5rem;
-        max-height: 500px;
-      }
-    }
-
-    .hds-side-nav__wrapper-body {
-      overflow-y: unset;
-      overflow-x: unset;
+      min-height: var(--token-app-side-nav-body-list-item-height);
+      padding: var(--token-app-side-nav-body-list-item-padding-vertical)
+        var(--token-app-side-nav-body-list-item-padding-horizontal);
+      color: var(--token-color-foreground-faint);
     }
 
     li.consul-side-nav__datacenter {
@@ -49,14 +58,10 @@
       margin-bottom: 1.5rem;
     }
 
-    .consul-datacenter-selector__dc-name {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      .consul-datacenter-selector__badges {
-        display: flex;
-        gap: 0.25rem;
-      }
+    /* @isInline makes the HDS Dropdown wrapper display:inline-block;
+       override to block so @isFullWidth on the toggle can fill the li */
+    .hds-side-nav__dropdown {
+      display: block;
     }
 
     .consul-side-nav__selector-title {
@@ -65,6 +70,22 @@
 
     .consul-side-nav__selector-description {
       padding-top: 0.5rem;
+    }
+
+    .consul-datacenter-selector__dc-name {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+
+      .consul-datacenter-selector__badges {
+        display: flex;
+        gap: 0.25rem;
+      }
+    }
+
+    [data-test-footer] {
+      margin-top: auto;
+      padding-top: 1rem;
     }
   }
 }

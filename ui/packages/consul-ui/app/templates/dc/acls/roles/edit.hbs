@@ -4,7 +4,7 @@
 }}
 
 <Route
-  @name={{routeName}}
+  @name={{this.routeName}}
 as |route|>
   <DataLoader @src={{
     uri '/${partition}/${nspace}/${dc}/role/${id}'
@@ -14,10 +14,9 @@ as |route|>
         dc=route.params.dc
         id=(or route.params.id '')
       )
-    }}
-  as |loader|>
+    }}>
 
-    <BlockSlot @name="error">
+    <:error as |loader|>
       {{#if (eq loader.error.status '401')}}
         <Consul::Acl::Disabled />
       {{else}}
@@ -26,9 +25,9 @@ as |route|>
           @login={{route.model.app.login.open}}
         />
       {{/if}}
-    </BlockSlot>
+    </:error>
 
-    <BlockSlot @name="loaded">
+    <:loaded as |loader|>
 {{#let
 
   route.params.dc
@@ -41,12 +40,7 @@ as |dc partition nspace item create|}}
   <AppView
     @login={{route.model.app.login.open}}
     >
-      <BlockSlot @name="breadcrumbs">
-          <ol>
-              <li><a data-test-back href={{href-to 'dc.acls.roles'}}>All Roles</a></li>
-          </ol>
-      </BlockSlot>
-      <BlockSlot @name="header">
+      <:header>
           <h1>
     {{#if create }}
               <route.Title @title="New Role" />
@@ -54,25 +48,27 @@ as |dc partition nspace item create|}}
               <route.Title @title="Edit Role" />
     {{/if}}
           </h1>
-      </BlockSlot>
-      <BlockSlot @name="content">
-  {{#if (not create) }}
-        <div class="definition-table">
-            <dl>
-              <dt>Role ID</dt>
-              <dd>
-                <CopyableCode
-                  @value={{item.ID}}
-                  @name="Role ID"
-                />
-              </dd>
-            </dl>
-        </div>
-  {{/if}}
-        {{ partial 'dc/acls/roles/form'}}
-      </BlockSlot>
+      </:header>
+      <:content>
+        <Consul::Role::Form
+          @form={{this.form}}
+          @item={{item}}
+          @dc={{dc}}
+          @nspace={{nspace}}
+          @partition={{partition}}
+          @create={{create}}
+          @id={{route.params.id}}
+          @items={{this.items}}
+          @onChange={{action 'change'}}
+          @onCreate={{fn this.onCreate item}}
+          @onUpdate={{fn this.onUpdate item}}
+          @onCancel={{fn this.onCancel item}}
+          @onDelete={{fn this.onDelete item}}
+          @onItemsChange={{action (mut this.items) value="data"}}
+        />
+      </:content>
   </AppView>
 {{/let}}
-    </BlockSlot>
+    </:loaded>
   </DataLoader>
 </Route>

@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -42,6 +42,18 @@ export default ({ properties }) =>
             }
         }
         return 0;
+      };
+    }
+    if (key.startsWith('Kind:')) {
+      return function (itemA, itemB) {
+        const [, dir] = key.split(':');
+        // The Kind sort is presented as "Service to Node" (asc) / "Node to
+        // Service" (desc), so service checks must come first for asc. A plain
+        // alphabetical sort would order 'node' before 'service' (n < s) — the
+        // opposite of the labels — so rank the kinds explicitly instead.
+        const rank = (item) => (item.Kind === 'service' ? 0 : 1);
+        const result = rank(itemA) - rank(itemB);
+        return dir === 'asc' ? result : -result;
       };
     }
     return properties(['Name', 'Kind'])(key);

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package write
@@ -86,7 +86,12 @@ func (c *cmd) Run(args []string) int {
 		written, _, err = entries.Set(entry, nil)
 	}
 	if err != nil {
-		c.UI.Error(fmt.Sprintf("Error writing config entry %s/%s: %v", entry.GetKind(), entry.GetName(), err))
+		// Preserve the original error message
+		baseErr := fmt.Sprintf("%v", err)
+
+		// Build enriched Jira-specific guidance
+		enrichedMsg := fmt.Sprintf("Error writing config entry %s/%s: %s — The target config entry is referenced by gateway/router and cannot be modified or deleted until it is unreferenced. "+"Check upstream configs (routers/gateways) referencing service '%s' with `consul config list` and `consul config read`.", entry.GetKind(), entry.GetName(), baseErr, entry.GetName())
+		c.UI.Error(enrichedMsg)
 		return 1
 	}
 

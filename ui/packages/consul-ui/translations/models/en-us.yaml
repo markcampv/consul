@@ -1,10 +1,11 @@
-# Copyright (c) HashiCorp, Inc.
+# Copyright IBM Corp. 2024, 2026
 # SPDX-License-Identifier: BUSL-1.1
 
 auth-method:
   Description: Description
   DisplayName: Display name
   TokenLocality: Token locality
+  TokenNameFormat: Token name format
   Type: Type
   MaxTokenTTL: Maximum token TTL
   Selector: Selector
@@ -26,6 +27,7 @@ auth-method:
     OIDCDiscoveryCACert: OIDC discovery CA cert
     OIDCClientID: Client ID
     OIDCClientSecret: Client secret
+    OIDCClientAssertionPrivateKey: Client assertion private key
     AllowedRedirectURIs: Allowed redirect URIs
     OIDCScopes: OIDC scopes
     VerboseOIDCLogging: Verbose OIDC logging

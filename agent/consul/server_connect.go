@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package consul
@@ -41,9 +41,7 @@ func (s *Server) getCARoots(ws memdb.WatchSet, state *state.Store) (*structs.Ind
 		var intermediates []string
 		if r.IntermediateCerts != nil {
 			intermediates = make([]string, len(r.IntermediateCerts))
-			for i, intermediate := range r.IntermediateCerts {
-				intermediates[i] = intermediate
-			}
+			copy(intermediates, r.IntermediateCerts)
 		}
 		// IMPORTANT: r must NEVER be modified, since it is a pointer
 		// directly to the structure in the memdb store.

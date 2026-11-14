@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package cachetype
@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"context"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
@@ -25,8 +26,8 @@ func TestNodeServices(t *testing.T) {
 	rpc.On("RPC", mock.Anything, "Catalog.NodeServices", mock.Anything, mock.Anything).Return(nil).
 		Run(func(args mock.Arguments) {
 			req := args.Get(2).(*structs.NodeSpecificRequest)
-			require.Equal(t, uint64(24), req.QueryOptions.MinQueryIndex)
-			require.Equal(t, 1*time.Second, req.QueryOptions.MaxQueryTime)
+			require.Equal(t, uint64(24), req.MinQueryIndex)
+			require.Equal(t, 1*time.Second, req.MaxQueryTime)
 			require.Equal(t, "node-01", req.Node)
 			require.True(t, req.AllowStale)
 
@@ -40,18 +41,19 @@ func TestNodeServices(t *testing.T) {
 				},
 			}
 
-			reply.QueryMeta.Index = 48
+			reply.Index = 48
 			resp = reply
 		})
 
 	// Fetch
-	resultA, err := typ.Fetch(cache.FetchOptions{
-		MinIndex: 24,
-		Timeout:  1 * time.Second,
-	}, &structs.NodeSpecificRequest{
-		Datacenter: "dc1",
-		Node:       "node-01",
-	})
+	resultA, err := typ.Fetch(context.Background(),
+		cache.FetchOptions{
+			MinIndex: 24,
+			Timeout:  1 * time.Second,
+		}, &structs.NodeSpecificRequest{
+			Datacenter: "dc1",
+			Node:       "node-01",
+		})
 	require.NoError(t, err)
 	require.Equal(t, cache.FetchResult{
 		Value: resp,
@@ -65,7 +67,7 @@ func TestNodeServices_badReqType(t *testing.T) {
 	typ := &NodeServices{RPC: rpc}
 
 	// Fetch
-	_, err := typ.Fetch(cache.FetchOptions{}, cache.TestRequest(
+	_, err := typ.Fetch(context.Background(), cache.FetchOptions{}, cache.TestRequest(
 		t, cache.RequestInfo{Key: "foo", MinIndex: 64}))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "wrong type")

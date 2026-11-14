@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package xds
@@ -9,14 +9,19 @@ import (
 	"text/template"
 
 	envoy_core_v3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
+	envoy_listener_v3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	envoy_http_v3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
+	envoy_tls_v3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
+	"github.com/hashicorp/go-hclog"
 	testinf "github.com/mitchellh/go-testing-interface"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/hashicorp/consul/agent/proxycfg"
 	"github.com/hashicorp/consul/agent/structs"
+	"github.com/hashicorp/consul/agent/xds/config"
 	"github.com/hashicorp/consul/agent/xds/configfetcher"
+	"github.com/hashicorp/consul/types"
 )
 
 type customListenerJSONOptions struct {
@@ -174,6 +179,10 @@ var _ configfetcher.ConfigFetcher = (configFetcherFunc)(nil)
 
 func (f configFetcherFunc) AdvertiseAddrLAN() string {
 	return f()
+}
+
+func (f configFetcherFunc) DNSRecursors() []string {
+	return nil
 }
 
 func TestResolveListenerSDSConfig(t *testing.T) {
@@ -436,6 +445,802 @@ func Test_setNormalizationOptions(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			setNormalizationOptions(tc.rn, tc.opts)
 			assert.Equal(t, tc.want, tc.opts)
+		})
+	}
+}
+
+func Test_makeHTTPFilter_maxRequestHeadersKb(t *testing.T) {
+	tests := map[string]struct {
+		maxRequestHeadersKb *uint32
+		wantPresent         bool
+		wantValue           uint32
+	}{
+		"nil - not set": {
+			maxRequestHeadersKb: nil,
+			wantPresent:         false,
+		},
+		"96KB": {
+			maxRequestHeadersKb: uintPointer(96),
+			wantPresent:         true,
+			wantValue:           96,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			opts := listenerFilterOpts{
+				protocol:            "http",
+				filterName:          "test",
+				routeName:           "test",
+				cluster:             "test",
+				maxRequestHeadersKb: tc.maxRequestHeadersKb,
+			}
+
+			filter, err := makeHTTPFilter(opts)
+			require.NoError(t, err)
+			require.NotNil(t, filter)
+
+			// Decode the typed config to check MaxRequestHeadersKb
+			var httpConnMgr envoy_http_v3.HttpConnectionManager
+			err = filter.GetTypedConfig().UnmarshalTo(&httpConnMgr)
+			require.NoError(t, err)
+
+			if tc.wantPresent {
+				require.NotNil(t, httpConnMgr.MaxRequestHeadersKb)
+				require.Equal(t, tc.wantValue, httpConnMgr.MaxRequestHeadersKb.GetValue())
+			} else {
+				require.Nil(t, httpConnMgr.MaxRequestHeadersKb)
+			}
+		})
+	}
+}
+
+func Test_makeHTTPFilter_stripForwardClientCertHeader(t *testing.T) {
+	tests := map[string]struct {
+		stripHeader bool
+		wantRemoved bool
+	}{
+		"disabled": {
+			stripHeader: false,
+			wantRemoved: false,
+		},
+		"enabled": {
+			stripHeader: true,
+			wantRemoved: true,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			opts := listenerFilterOpts{
+				protocol:                     "http",
+				filterName:                   "test",
+				routeName:                    "test",
+				cluster:                      "test",
+				forwardClientDetails:         true,
+				stripForwardClientCertHeader: tc.stripHeader,
+			}
+
+			filter, err := makeHTTPFilter(opts)
+			require.NoError(t, err)
+
+			var httpConnMgr envoy_http_v3.HttpConnectionManager
+			err = filter.GetTypedConfig().UnmarshalTo(&httpConnMgr)
+			require.NoError(t, err)
+
+			routeConfig := httpConnMgr.GetRouteConfig()
+			require.NotNil(t, routeConfig)
+			require.Len(t, routeConfig.VirtualHosts, 1)
+			require.Len(t, routeConfig.VirtualHosts[0].Routes, 1)
+
+			headers := routeConfig.VirtualHosts[0].Routes[0].GetRequestHeadersToRemove()
+			if tc.wantRemoved {
+				require.Contains(t, headers, "x-forwarded-client-cert")
+			} else {
+				require.NotContains(t, headers, "x-forwarded-client-cert")
+			}
+		})
+	}
+}
+
+func Test_makeUpstreamFilterChain_maxRequestHeadersKb(t *testing.T) {
+	tests := map[string]struct {
+		maxRequestHeadersKb *uint32
+		protocol            string
+		wantPresent         bool
+		wantValue           uint32
+	}{
+		"tcp protocol ignores header settings": {
+			maxRequestHeadersKb: uintPointer(96),
+			protocol:            "tcp",
+			wantPresent:         false,
+		},
+		"http with nil header settings": {
+			maxRequestHeadersKb: nil,
+			protocol:            "http",
+			wantPresent:         false,
+		},
+		"http with 96KB header limit": {
+			maxRequestHeadersKb: uintPointer(96),
+			protocol:            "http",
+			wantPresent:         true,
+			wantValue:           96,
+		},
+		"grpc with 128KB header limit": {
+			maxRequestHeadersKb: uintPointer(128),
+			protocol:            "grpc",
+			wantPresent:         true,
+			wantValue:           128,
+		},
+		"http2 with 256KB header limit": {
+			maxRequestHeadersKb: uintPointer(256),
+			protocol:            "http2",
+			wantPresent:         true,
+			wantValue:           256,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			s := &ResourceGenerator{
+				Logger: hclog.NewNullLogger(),
+			}
+
+			opts := filterChainOpts{
+				protocol:            tc.protocol,
+				filterName:          "test",
+				clusterName:         "test-cluster",
+				maxRequestHeadersKb: tc.maxRequestHeadersKb,
+			}
+
+			filterChain, err := s.makeUpstreamFilterChain(opts)
+			require.NoError(t, err)
+			require.NotNil(t, filterChain)
+			require.Len(t, filterChain.Filters, 1)
+
+			filter := filterChain.Filters[0]
+
+			if tc.protocol == "tcp" {
+				// TCP proxy doesn't use HTTP connection manager
+				return
+			}
+
+			// For HTTP-like protocols, check the HTTP connection manager
+			var httpConnMgr envoy_http_v3.HttpConnectionManager
+			err = filter.GetTypedConfig().UnmarshalTo(&httpConnMgr)
+			require.NoError(t, err)
+
+			if tc.wantPresent {
+				require.NotNil(t, httpConnMgr.MaxRequestHeadersKb)
+				require.Equal(t, tc.wantValue, httpConnMgr.MaxRequestHeadersKb.GetValue())
+			} else {
+				require.Nil(t, httpConnMgr.MaxRequestHeadersKb)
+			}
+		})
+	}
+}
+
+func Test_makeAPIGatewayListeners_maxRequestHeadersKb(t *testing.T) {
+	tests := map[string]struct {
+		maxRequestHeadersKb *uint32
+		protocol            string
+		wantPresent         bool
+		wantValue           uint32
+	}{
+		"http listener with nil headers": {
+			maxRequestHeadersKb: nil,
+			protocol:            "http",
+			wantPresent:         false,
+		},
+		"http listener with 96KB": {
+			maxRequestHeadersKb: uintPointer(96),
+			protocol:            "http",
+			wantPresent:         true,
+			wantValue:           96,
+		},
+		"tcp listener ignores header setting": {
+			maxRequestHeadersKb: uintPointer(96),
+			protocol:            "tcp",
+			wantPresent:         false, // TCP doesn't use HTTP connection manager
+		},
+		"http listener with zero value": {
+			maxRequestHeadersKb: uintPointer(0),
+			protocol:            "http",
+			wantPresent:         false, // Default value would be use for <= 0
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			// Create listener filter opts as would be used in API Gateway
+			opts := listenerFilterOpts{
+				protocol:            tc.protocol,
+				filterName:          "test-api-gateway",
+				routeName:           "test-route",
+				cluster:             "test-cluster",
+				maxRequestHeadersKb: tc.maxRequestHeadersKb,
+			}
+
+			// Generate the HTTP filter
+			filter, err := makeHTTPFilter(opts)
+
+			if tc.protocol == "tcp" {
+				// For TCP, the function should still work but the result is not used
+				// in actual TCP proxy configurations
+				require.NoError(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotNil(t, filter)
+
+			// Decode the typed config to check MaxRequestHeadersKb
+			var httpConnMgr envoy_http_v3.HttpConnectionManager
+			err = filter.GetTypedConfig().UnmarshalTo(&httpConnMgr)
+			require.NoError(t, err)
+
+			if tc.wantPresent {
+				require.NotNil(t, httpConnMgr.MaxRequestHeadersKb)
+				require.Equal(t, tc.wantValue, httpConnMgr.MaxRequestHeadersKb.GetValue())
+			} else {
+				require.Nil(t, httpConnMgr.MaxRequestHeadersKb)
+			}
+		})
+	}
+}
+
+func Test_makeMeshGatewayPeerFilterChain_config(t *testing.T) {
+	const listenerTracingJSON = `{
+		"@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager.Tracing",
+		"random_sampling": {"value": 100},
+		"overall_sampling": {"value": 100},
+		"spawn_upstream_span": true
+	}`
+
+	tests := map[string]struct {
+		proxyConfig        map[string]interface{}
+		serviceProxyConfig map[string]interface{}
+		protocol           string
+		wantPresent        bool
+		wantValue          uint32
+		wantTracing        bool
+	}{
+		"defaults to proxy config when no service override": {
+			proxyConfig: map[string]interface{}{
+				"max_request_headers_kb": int64(128),
+			},
+			serviceProxyConfig: map[string]interface{}{},
+			protocol:           "http",
+			wantPresent:        true,
+			wantValue:          128,
+		},
+		"service override takes precedence over proxy config": {
+			proxyConfig: map[string]interface{}{
+				"max_request_headers_kb": int64(128),
+			},
+			serviceProxyConfig: map[string]interface{}{
+				"max_request_headers_kb": int64(256),
+			},
+			protocol:    "http",
+			wantPresent: true,
+			wantValue:   256,
+		},
+		"no proxy config and no service override": {
+			proxyConfig:        map[string]interface{}{},
+			serviceProxyConfig: map[string]interface{}{},
+			protocol:           "http",
+			wantPresent:        false,
+		},
+		"service override with nil proxy config": {
+			proxyConfig: nil,
+			serviceProxyConfig: map[string]interface{}{
+				"max_request_headers_kb": int64(64),
+			},
+			protocol:    "http",
+			wantPresent: true,
+			wantValue:   64,
+		},
+		"tcp protocol ignores header settings": {
+			proxyConfig: map[string]interface{}{
+				"max_request_headers_kb": int64(128),
+			},
+			serviceProxyConfig: map[string]interface{}{
+				"max_request_headers_kb": int64(256),
+			},
+			protocol:    "tcp",
+			wantPresent: false,
+		},
+		"grpc protocol uses service override": {
+			proxyConfig: map[string]interface{}{
+				"max_request_headers_kb": int64(128),
+			},
+			serviceProxyConfig: map[string]interface{}{
+				"max_request_headers_kb": int64(512),
+			},
+			protocol:    "grpc",
+			wantPresent: true,
+			wantValue:   512,
+		},
+		"applies listener tracing config": {
+			proxyConfig: map[string]interface{}{
+				"envoy_listener_tracing_json": listenerTracingJSON,
+			},
+			serviceProxyConfig: map[string]interface{}{},
+			protocol:           "http",
+			wantTracing:        true,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			// Create test service name
+			svc := structs.NewServiceName("test-service", structs.DefaultEnterpriseMetaInDefaultPartition())
+
+			// Create mock config snapshot using the test helper
+			snap := proxycfg.TestConfigSnapshotPeeredMeshGateway(t, "default-services-http", func(ns *structs.NodeService) {
+				ns.Proxy.Config = tc.proxyConfig
+			}, nil)
+
+			// Add service group with proxy config if provided
+			if tc.serviceProxyConfig != nil {
+				snap.MeshGateway.ServiceGroups[svc] = structs.CheckServiceNodes{
+					{
+						Service: &structs.NodeService{
+							Proxy: structs.ConnectProxyConfig{
+								Config: tc.serviceProxyConfig,
+							},
+						},
+					},
+				}
+			}
+
+			// Create mock discovery chain with a first node
+			chain := &structs.CompiledDiscoveryChain{
+				ServiceName: svc.Name,
+				Namespace:   svc.NamespaceOrDefault(),
+				Partition:   svc.PartitionOrDefault(),
+				Datacenter:  "dc1",
+				Protocol:    tc.protocol,
+				StartNode:   "test-node",
+				Nodes: map[string]*structs.DiscoveryGraphNode{
+					"test-node": {
+						Type: structs.DiscoveryGraphNodeTypeResolver,
+						Name: "test-service.default.default.dc1",
+						Resolver: &structs.DiscoveryResolver{
+							Target: "test-service.default.default.dc1",
+						},
+					},
+				},
+				Targets: map[string]*structs.DiscoveryTarget{
+					"test-service.default.default.dc1": {
+						ID:         "test-service.default.default.dc1",
+						Service:    svc.Name,
+						Namespace:  svc.NamespaceOrDefault(),
+						Partition:  svc.PartitionOrDefault(),
+						Datacenter: "dc1",
+						SNI:        "test-service.default.default.dc1.internal.test-domain.consul",
+						Name:       "test-service.default.default.dc1.internal.test-domain.consul",
+					},
+				},
+			}
+
+			// Create resource generator
+			s := &ResourceGenerator{
+				Logger: hclog.NewNullLogger(),
+			}
+
+			// Call the function under test
+			filterChain, err := s.makeMeshGatewayPeerFilterChain(snap, svc, []string{"test-peer"}, chain)
+
+			require.NoError(t, err)
+			require.NotNil(t, filterChain)
+			require.Len(t, filterChain.Filters, 1)
+
+			filter := filterChain.Filters[0]
+
+			if tc.protocol == "tcp" {
+				// For TCP, verify we don't have HTTP connection manager
+				require.Contains(t, filter.Name, "tcp_proxy")
+				return
+			}
+
+			// For HTTP-like protocols, check the HTTP connection manager
+			require.Contains(t, filter.Name, "http_connection_manager")
+			var httpConnMgr envoy_http_v3.HttpConnectionManager
+			err = filter.GetTypedConfig().UnmarshalTo(&httpConnMgr)
+			require.NoError(t, err)
+
+			if tc.wantPresent {
+				require.NotNil(t, httpConnMgr.MaxRequestHeadersKb, "expected MaxRequestHeadersKb to be set but it was nil")
+				require.Equal(t, tc.wantValue, httpConnMgr.MaxRequestHeadersKb.GetValue())
+			} else {
+				require.Nil(t, httpConnMgr.MaxRequestHeadersKb, "expected MaxRequestHeadersKb to be nil but it was set")
+			}
+			if tc.wantTracing {
+				require.NotNil(t, httpConnMgr.Tracing)
+				require.Equal(t, float64(100), httpConnMgr.Tracing.RandomSampling.GetValue())
+				require.Equal(t, float64(100), httpConnMgr.Tracing.OverallSampling.GetValue())
+				require.True(t, httpConnMgr.Tracing.SpawnUpstreamSpan.GetValue())
+			}
+		})
+	}
+}
+
+// Helper function for uint32 pointers
+func uintPointer(i uint32) *uint32 {
+	return &i
+}
+
+// TestFinalizePublicListenerFromConfig_PropagatesInjectionErrors is a regression
+// test. Previously finalizePublicListenerFromConfig swallowed
+// errors from the L4 intention (RBAC) and mTLS injection steps by returning nil.
+// That allowed an insecure public listener (no mTLS and/or no intention
+// enforcement) to be served while the caller's error check was dead code. The
+// function must instead surface the error so the caller drops the listener.
+func TestFinalizePublicListenerFromConfig_PropagatesInjectionErrors(t *testing.T) {
+	roots, _ := proxycfg.TestCerts(t)
+
+	// A snapshot whose Kind is neither a connect proxy nor a mesh gateway makes
+	// injectConnectTLSForPublicListener (via createDownstreamTransportSocketForConnectTLS)
+	// fail deterministically, so we can assert the error is propagated.
+	newSnap := func() *proxycfg.ConfigSnapshot {
+		return &proxycfg.ConfigSnapshot{
+			Kind:  structs.ServiceKindTerminatingGateway,
+			Roots: roots,
+		}
+	}
+
+	newListener := func() *envoy_listener_v3.Listener {
+		return &envoy_listener_v3.Listener{
+			Name:         "public_listener",
+			FilterChains: []*envoy_listener_v3.FilterChain{{}},
+		}
+	}
+
+	s := &ResourceGenerator{Logger: hclog.NewNullLogger()}
+
+	t.Run("mTLS injection failure is surfaced (HTTP filter path)", func(t *testing.T) {
+		err := s.finalizePublicListenerFromConfig(newListener(), newSnap(), true)
+		require.Error(t, err, "mTLS injection error must not be swallowed")
+	})
+
+	t.Run("injection failure is surfaced (L4 filter path)", func(t *testing.T) {
+		err := s.finalizePublicListenerFromConfig(newListener(), newSnap(), false)
+		require.Error(t, err, "injection error must not be swallowed")
+	})
+}
+
+// TestCreateDownstreamTransportSocketForConnectTLS_UsesSDSSecrets asserts that a
+// Connect sidecar's public listener refers to its leaf certificate and CA roots
+// by SDS name rather than embedding the PEM bytes inline.
+//
+// Inlining the certificate material meant that every leaf rotation produced a
+// different listener proto, which changed Envoy's filter chain hash and forced a
+// drain of every established connection. Referencing the secrets by name keeps
+// the listener byte-identical across rotations, so only the Secret resources
+// change and connections survive.
+func TestCreateDownstreamTransportSocketForConnectTLS_UsesSDSSecrets(t *testing.T) {
+	roots, _ := proxycfg.TestCerts(t)
+
+	snap := &proxycfg.ConfigSnapshot{
+		Kind:  structs.ServiceKindConnectProxy,
+		Roots: roots,
+	}
+
+	ts, err := createDownstreamTransportSocketForConnectTLS(snap, &config.ProxyConfig{Protocol: "tcp"}, nil, nil)
+	require.NoError(t, err)
+	require.NotNil(t, ts)
+
+	var downstreamCtx envoy_tls_v3.DownstreamTlsContext
+	require.NoError(t, ts.GetTypedConfig().UnmarshalTo(&downstreamCtx))
+
+	common := downstreamCtx.GetCommonTlsContext()
+	require.NotNil(t, common)
+
+	// The leaf must be referenced by SDS name, with no inline certificate.
+	require.Empty(t, common.GetTlsCertificates(),
+		"leaf certificate must not be embedded inline in the listener")
+	require.Len(t, common.GetTlsCertificateSdsSecretConfigs(), 1)
+	require.Equal(t, connectLeafSecretName, common.GetTlsCertificateSdsSecretConfigs()[0].GetName())
+
+	// The roots must likewise be referenced by SDS name.
+	require.Nil(t, common.GetValidationContext(),
+		"CA roots must not be embedded inline in the listener")
+	require.Equal(t, connectRootSecretName, common.GetValidationContextSdsSecretConfig().GetName())
+
+	// Both secrets must be delivered over the existing ADS stream, otherwise
+	// Envoy would need a separate SDS cluster that Consul does not configure.
+	for _, cfg := range []*envoy_tls_v3.SdsSecretConfig{
+		common.GetTlsCertificateSdsSecretConfigs()[0],
+		common.GetValidationContextSdsSecretConfig(),
+	} {
+		require.NotNil(t, cfg.GetSdsConfig().GetAds(), "secret %q must be fetched over ADS", cfg.GetName())
+		require.Equal(t, envoy_core_v3.ApiVersion_V3, cfg.GetSdsConfig().GetResourceApiVersion())
+	}
+}
+
+// Test_injectRequestNormalizationOnFilterChains is a unit test for
+// Test_injectRequestNormalizationOnFilterChains verifies that injectRequestNormalizationOnFilterChains
+// correctly applies Consul's normalization defaults to every
+// HttpConnectionManager filter on a user-provided public listener, and that it
+// handles edge cases (no HCM filter, unsupported ConfigType, disabled
+// normalization) without unexpected errors or mutations.
+func Test_injectRequestNormalizationOnFilterChains(t *testing.T) {
+	tests := map[string]struct {
+		// listenerJSON returns the JSON for the listener under test, or "" to
+		// use a plain TCP listener (no HCM filter).
+		listenerJSON string
+		rn           *structs.RequestNormalizationMeshConfig
+		wantErr      bool
+		// wantNormalize is the expected NormalizePath.Value after injection.
+		// Only checked when wantErr is false and listener has an HCM filter.
+		wantNormalize *bool
+	}{
+		"nil config applies default normalization (normalizePath=true)": {
+			listenerJSON: customHTTPListenerJSON(t, customHTTPListenerJSONOptions{
+				Name:                      "public_listener",
+				HTTPConnectionManagerName: httpConnectionManagerNewName,
+			}),
+			rn:            nil,
+			wantErr:       false,
+			wantNormalize: func() *bool { v := true; return &v }(),
+		},
+		"empty config applies default normalization (normalizePath=true)": {
+			listenerJSON: customHTTPListenerJSON(t, customHTTPListenerJSONOptions{
+				Name:                      "public_listener",
+				HTTPConnectionManagerName: httpConnectionManagerNewName,
+			}),
+			rn:            &structs.RequestNormalizationMeshConfig{},
+			wantErr:       false,
+			wantNormalize: func() *bool { v := true; return &v }(),
+		},
+		"old HCM filter name is also patched": {
+			listenerJSON: customHTTPListenerJSON(t, customHTTPListenerJSONOptions{
+				Name:                      "public_listener",
+				HTTPConnectionManagerName: httpConnectionManagerOldName,
+			}),
+			rn:            nil,
+			wantErr:       false,
+			wantNormalize: func() *bool { v := true; return &v }(),
+		},
+		"InsecureDisablePathNormalization leaves normalizePath unset": {
+			listenerJSON: customHTTPListenerJSON(t, customHTTPListenerJSONOptions{
+				Name:                      "public_listener",
+				HTTPConnectionManagerName: httpConnectionManagerNewName,
+			}),
+			rn: &structs.RequestNormalizationMeshConfig{
+				InsecureDisablePathNormalization: true,
+			},
+			wantErr:       false,
+			wantNormalize: nil,
+		},
+		"no HCM filter — listener is returned unchanged without error": {
+			listenerJSON: customListenerJSON(t, customListenerJSONOptions{
+				Name: "public_listener",
+			}),
+			rn:      nil,
+			wantErr: false,
+			// NormalizePath assertion is skipped; no HCM filter to patch.
+			wantNormalize: nil,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			listener, err := makeListenerFromUserConfig(tc.listenerJSON)
+			require.NoError(t, err)
+
+			err = injectRequestNormalizationOnFilterChains(listener, tc.rn)
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+
+			// Locate the first HCM filter to check NormalizePath.
+			var hcm *envoy_http_v3.HttpConnectionManager
+			for _, chain := range listener.FilterChains {
+				for _, f := range chain.Filters {
+					if f.Name == httpConnectionManagerNewName || f.Name == httpConnectionManagerOldName {
+						tc2, ok := f.ConfigType.(*envoy_listener_v3.Filter_TypedConfig)
+						require.True(t, ok)
+						var hcmVal envoy_http_v3.HttpConnectionManager
+						require.NoError(t, tc2.TypedConfig.UnmarshalTo(&hcmVal))
+						hcm = &hcmVal
+						break
+					}
+				}
+				if hcm != nil {
+					break
+				}
+			}
+
+			if tc.wantNormalize == nil {
+				// Either no HCM filter present, or NormalizePath should remain unset.
+				if hcm != nil {
+					assert.Nil(t, hcm.NormalizePath,
+						"expected NormalizePath to be nil when InsecureDisablePathNormalization=true")
+				}
+			} else {
+				require.NotNil(t, hcm, "expected an HCM filter on the listener")
+				require.NotNil(t, hcm.NormalizePath)
+				assert.Equal(t, *tc.wantNormalize, hcm.NormalizePath.GetValue())
+			}
+		})
+	}
+}
+
+func TestMakeTLSParametersFromProxyTLSConfig_ECDHCurves(t *testing.T) {
+	pqcDefaults := []string{"X25519MLKEM768", "X25519", "P-256"}
+	tests := map[string]struct {
+		input *structs.MeshDirectionalTLSConfig
+		want  *envoy_tls_v3.TlsParameters
+	}{
+		"nil config returns empty parameters": {
+			input: nil,
+			want:  &envoy_tls_v3.TlsParameters{},
+		},
+		"empty config returns empty parameters": {
+			input: &structs.MeshDirectionalTLSConfig{},
+			want:  &envoy_tls_v3.TlsParameters{},
+		},
+		"TLSv1_3 with nil curves injects PQC default curves": {
+			input: &structs.MeshDirectionalTLSConfig{
+				TLSMinVersion: types.TLSv1_3,
+				ECDHCurves:    nil,
+			},
+			want: &envoy_tls_v3.TlsParameters{
+				TlsMinimumProtocolVersion: envoy_tls_v3.TlsParameters_TLSv1_3,
+				TlsMaximumProtocolVersion: envoy_tls_v3.TlsParameters_TLSv1_3,
+				EcdhCurves:                pqcDefaults,
+			},
+		},
+		"TLSv1_3 with empty curves slice injects PQC default curves": {
+			input: &structs.MeshDirectionalTLSConfig{
+				TLSMinVersion: types.TLSv1_3,
+				ECDHCurves:    []string{},
+			},
+			want: &envoy_tls_v3.TlsParameters{
+				TlsMinimumProtocolVersion: envoy_tls_v3.TlsParameters_TLSv1_3,
+				TlsMaximumProtocolVersion: envoy_tls_v3.TlsParameters_TLSv1_3,
+				EcdhCurves:                pqcDefaults,
+			},
+		},
+		"TLSv1_3 with explicit curves overrides default": {
+			input: &structs.MeshDirectionalTLSConfig{
+				TLSMinVersion: types.TLSv1_3,
+				ECDHCurves:    []string{"P-384"},
+			},
+			want: &envoy_tls_v3.TlsParameters{
+				TlsMinimumProtocolVersion: envoy_tls_v3.TlsParameters_TLSv1_3,
+				TlsMaximumProtocolVersion: envoy_tls_v3.TlsParameters_TLSv1_3,
+				EcdhCurves:                []string{"P-384"},
+			},
+		},
+		"TLSv1_3 with explicit PQC and classical curves is not extended with P-256": {
+			input: &structs.MeshDirectionalTLSConfig{
+				TLSMinVersion: types.TLSv1_3,
+				ECDHCurves:    []string{"X25519MLKEM768", "X25519"},
+			},
+			want: &envoy_tls_v3.TlsParameters{
+				TlsMinimumProtocolVersion: envoy_tls_v3.TlsParameters_TLSv1_3,
+				TlsMaximumProtocolVersion: envoy_tls_v3.TlsParameters_TLSv1_3,
+				EcdhCurves:                []string{"X25519MLKEM768", "X25519"},
+			},
+		},
+		"TLSv1_3 min with TLS_AUTO max defaults max to TLSv1_3": {
+			input: &structs.MeshDirectionalTLSConfig{
+				TLSMinVersion: types.TLSv1_3,
+				TLSMaxVersion: types.TLSVersionAuto,
+			},
+			want: &envoy_tls_v3.TlsParameters{
+				TlsMinimumProtocolVersion: envoy_tls_v3.TlsParameters_TLSv1_3,
+				TlsMaximumProtocolVersion: envoy_tls_v3.TlsParameters_TLSv1_3,
+				EcdhCurves:                pqcDefaults,
+			},
+		},
+		"TLSv1_3 min and max are preserved": {
+			input: &structs.MeshDirectionalTLSConfig{
+				TLSMinVersion: types.TLSv1_3,
+				TLSMaxVersion: types.TLSv1_3,
+			},
+			want: &envoy_tls_v3.TlsParameters{
+				TlsMinimumProtocolVersion: envoy_tls_v3.TlsParameters_TLSv1_3,
+				TlsMaximumProtocolVersion: envoy_tls_v3.TlsParameters_TLSv1_3,
+				EcdhCurves:                pqcDefaults,
+			},
+		},
+		"TLS_AUTO min does not set max or inject curves": {
+			input: &structs.MeshDirectionalTLSConfig{
+				TLSMinVersion: types.TLSVersionAuto,
+			},
+			want: &envoy_tls_v3.TlsParameters{},
+		},
+		"unspecified min with TLSv1_3 max is unchanged": {
+			input: &structs.MeshDirectionalTLSConfig{
+				TLSMaxVersion: types.TLSv1_3,
+			},
+			want: &envoy_tls_v3.TlsParameters{
+				TlsMaximumProtocolVersion: envoy_tls_v3.TlsParameters_TLSv1_3,
+			},
+		},
+		"TLSv1_2 with explicit TLSv1_3 max version": {
+			input: &structs.MeshDirectionalTLSConfig{
+				TLSMinVersion: types.TLSv1_2,
+				TLSMaxVersion: types.TLSv1_3,
+				ECDHCurves:    nil,
+			},
+			want: &envoy_tls_v3.TlsParameters{
+				TlsMinimumProtocolVersion: envoy_tls_v3.TlsParameters_TLSv1_2,
+				TlsMaximumProtocolVersion: envoy_tls_v3.TlsParameters_TLSv1_3,
+				EcdhCurves:                nil,
+			},
+		},
+		"TLSv1_2 with nil curves does not inject curves or set max": {
+			input: &structs.MeshDirectionalTLSConfig{
+				TLSMinVersion: types.TLSv1_2,
+				ECDHCurves:    nil,
+			},
+			want: &envoy_tls_v3.TlsParameters{
+				TlsMinimumProtocolVersion: envoy_tls_v3.TlsParameters_TLSv1_2,
+				EcdhCurves:                nil,
+			},
+		},
+		"TLSv1_1 with nil curves does not inject curves": {
+			input: &structs.MeshDirectionalTLSConfig{
+				TLSMinVersion: types.TLSv1_1,
+				ECDHCurves:    nil,
+			},
+			want: &envoy_tls_v3.TlsParameters{
+				TlsMinimumProtocolVersion: envoy_tls_v3.TlsParameters_TLSv1_1,
+				EcdhCurves:                nil,
+			},
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := makeTLSParametersFromProxyTLSConfig(tc.input)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestMakeTLSParametersFromProxyTLSConfig_DoesNotAliasDefaults(t *testing.T) {
+	before := append([]string(nil), types.DefaultPQCECDHCurves...)
+	got := makeTLSParametersFromProxyTLSConfig(&structs.MeshDirectionalTLSConfig{TLSMinVersion: types.TLSv1_3})
+	require.NotEmpty(t, got.EcdhCurves)
+	got.EcdhCurves[0] = "mutated"
+	require.Equal(t, before, types.DefaultPQCECDHCurves)
+}
+
+func TestMakeTLSParametersFromGatewayTLSConfig(t *testing.T) {
+	tests := map[string]struct {
+		input structs.GatewayTLSConfig
+		want  *envoy_tls_v3.TlsParameters
+	}{
+		"TLSv1_3 gateway listener does not inject curves": {
+			input: structs.GatewayTLSConfig{
+				TLSMinVersion: types.TLSv1_3,
+			},
+			want: &envoy_tls_v3.TlsParameters{
+				TlsMinimumProtocolVersion: envoy_tls_v3.TlsParameters_TLSv1_3,
+				EcdhCurves:                nil,
+			},
+		},
+		"TLSv1_2 gateway listener does not inject curves": {
+			input: structs.GatewayTLSConfig{
+				TLSMinVersion: types.TLSv1_2,
+			},
+			want: &envoy_tls_v3.TlsParameters{
+				TlsMinimumProtocolVersion: envoy_tls_v3.TlsParameters_TLSv1_2,
+				EcdhCurves:                nil,
+			},
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := makeTLSParametersFromGatewayTLSConfig(tc.input)
+			assert.Equal(t, tc.want, got)
 		})
 	}
 }

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package consul
@@ -8,11 +8,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/armon/go-metrics"
-	"github.com/armon/go-metrics/prometheus"
 	"github.com/hashicorp/go-bexpr"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-memdb"
+	"github.com/hashicorp/go-metrics"
+	"github.com/hashicorp/go-metrics/prometheus"
 	hashstructure_v2 "github.com/mitchellh/hashstructure/v2"
 
 	"github.com/hashicorp/consul/acl"
@@ -28,7 +28,7 @@ var IntentionSummaries = []prometheus.SummaryDefinition{
 	},
 	{
 		Name: []string{"intention", "apply"},
-		Help: "",
+		Help: "Measures the time it takes to apply service mesh intention (authorization policy) changes to the state store.",
 	},
 }
 
@@ -109,7 +109,7 @@ func (s *Intention) Apply(args *structs.IntentionRequest, reply *string) error {
 
 	// Get the ACL token for the request for the checks below.
 	var entMeta acl.EnterpriseMeta
-	authz, err := s.srv.ACLResolver.ResolveTokenAndDefaultMeta(args.Token, &entMeta, nil)
+	authz, err := s.srv.ResolveTokenAndDefaultMeta(args.Token, &entMeta, nil)
 	if err != nil {
 		return err
 	}
@@ -135,7 +135,7 @@ func (s *Intention) Apply(args *structs.IntentionRequest, reply *string) error {
 			mut, err = s.computeApplyChangesDelete(accessorID, authz, &entMeta, args)
 		} else {
 			legacyWrite = true
-			mut, err = s.computeApplyChangesLegacyDelete(accessorID, authz, &entMeta, args)
+			mut, err = s.computeApplyChangesLegacyDelete(accessorID, authz, args)
 		}
 	case structs.IntentionOpDeleteAll:
 		// This is an internal operation initiated by the leader and is not
@@ -358,12 +358,7 @@ func (s *Intention) computeApplyChangesUpsert(
 	}, nil
 }
 
-func (s *Intention) computeApplyChangesLegacyDelete(
-	accessorID string,
-	authz acl.Authorizer,
-	entMeta *acl.EnterpriseMeta,
-	args *structs.IntentionRequest,
-) (*structs.IntentionMutation, error) {
+func (s *Intention) computeApplyChangesLegacyDelete(accessorID string, authz acl.Authorizer, args *structs.IntentionRequest) (*structs.IntentionMutation, error) {
 	_, _, ixn, err := s.srv.fsm.State().IntentionGet(nil, args.Intention.ID)
 	if err != nil {
 		return nil, fmt.Errorf("Intention lookup failed: %v", err)

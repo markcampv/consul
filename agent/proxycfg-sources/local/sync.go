@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package local
@@ -17,7 +17,7 @@ import (
 
 const resyncFrequency = 30 * time.Second
 
-const source proxycfg.ProxySource = "local"
+const source proxycfg.ProxySource = proxycfg.ProxySourceLocal
 
 // SyncConfig contains the dependencies required by Sync.
 type SyncConfig struct {

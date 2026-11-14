@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -32,7 +32,7 @@ export default class DimensionsProvider extends Component {
   }
 
   get footer() {
-    return document.querySelector('footer[role="contentinfo"]');
+    return document.querySelector('#contentinfo');
   }
 
   @action measureDimensions(element) {

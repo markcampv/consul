@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package consul
@@ -130,7 +130,7 @@ func TestIsConsulNode(t *testing.T) {
 func TestGenerateUUID(t *testing.T) {
 	t.Parallel()
 	prev := generateUUID()
-	re, err := regexp.Compile("[\\da-f]{8}-[\\da-f]{4}-[\\da-f]{4}-[\\da-f]{4}-[\\da-f]{12}")
+	re, err := regexp.Compile(`[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}`)
 	require.NoError(t, err)
 
 	for i := 0; i < 100; i++ {

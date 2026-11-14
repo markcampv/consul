@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package uiserver
@@ -25,10 +25,50 @@ import (
 
 const (
 	compiledProviderJSPath = "assets/compiled-metrics-providers.js"
+	// CSP header to mitigate XSS and data injection attacks while allowing required UI functionality.
+	cspHeader = "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none';"
 )
 
 //go:embed dist
 var dist embed.FS
+
+// cspResponseWriter wraps http.ResponseWriter to inject CSP headers for HTML responses
+type cspResponseWriter struct {
+	http.ResponseWriter
+	headerWritten bool
+}
+
+func (w *cspResponseWriter) WriteHeader(statusCode int) {
+	if !w.headerWritten {
+		// Check if this is an HTML response
+		if ct := w.Header().Get("Content-Type"); strings.Contains(ct, "text/html") && w.Header().Get("Content-Security-Policy") == "" {
+			w.Header().Set("Content-Security-Policy", cspHeader)
+			w.Header().Set("X-Frame-Options", "DENY")
+		}
+		w.headerWritten = true
+	}
+	w.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (w *cspResponseWriter) Write(b []byte) (int, error) {
+	if !w.headerWritten {
+		// If headers haven't been written yet but we're writing body, infer HTML
+		if ct := w.Header().Get("Content-Type"); (ct == "" || strings.Contains(ct, "text/html")) && w.Header().Get("Content-Security-Policy") == "" {
+			w.Header().Set("Content-Security-Policy", cspHeader)
+			w.Header().Set("X-Frame-Options", "DENY")
+		}
+		w.headerWritten = true
+		w.ResponseWriter.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(b)
+}
+
+// Flush implements http.Flusher interface
+func (w *cspResponseWriter) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
 
 // Handler is the http.Handler that serves the Consul UI. It may serve from the
 // embedded fs.FS or from an external directory. It provides a few important
@@ -67,12 +107,20 @@ func NewHandler(runtimeCfg *config.RuntimeConfig, logger hclog.Logger, transform
 
 // ServeHTTP implements http.Handler and serves UI HTTP requests
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Wrap the response writer to inject CSP headers for HTML responses
+	w = &cspResponseWriter{ResponseWriter: w}
+
 	// We need to support the path being trimmed by http.StripTags just like the
 	// file servers do since http.StripPrefix will remove the leading slash in our
 	// current config. Everything else works fine that way so we should to.
 	pathTrimmed := strings.TrimLeft(r.URL.Path, "/")
 	if pathTrimmed == compiledProviderJSPath {
 		h.serveUIMetricsProviders(w)
+		return
+	}
+
+	if strings.HasPrefix(pathTrimmed, "assets/chunk") && strings.HasSuffix(pathTrimmed, ".js") {
+		h.serveTransformedJS(w, pathTrimmed)
 		return
 	}
 
@@ -251,4 +299,66 @@ func (h *Handler) renderIndexFile(cfg *config.RuntimeConfig, fsys fs.FS) (fs.Fil
 
 	file := newBufferedFile(&buf, info)
 	return file, nil
+}
+
+// serveTransformedJS serves a transformed version of the specified JS file.
+// It replaces certain keys in the JS file with values from the runtime config.
+// This is used to inject the root URL and other dynamic values into the JS file
+// so that it can be served correctly in different environments.
+func (h *Handler) serveTransformedJS(w http.ResponseWriter, jsPath string) {
+	cfg := h.getRuntimeConfig()
+
+	var fsys fs.FS
+	if cfg.UIConfig.Dir == "" {
+		sub, err := fs.Sub(dist, "dist")
+		if err != nil {
+			h.logger.Error("Failed to open embedded dist: %w", err)
+			return
+		}
+		fsys = sub
+	} else {
+		fsys = os.DirFS(cfg.UIConfig.Dir)
+	}
+
+	f, err := fsys.Open(jsPath)
+	if err != nil {
+		http.Error(w, "JS file not found", http.StatusNotFound)
+		h.logger.Error("JS file not found: %w", err)
+		return
+	}
+	defer f.Close()
+
+	content, err := io.ReadAll(f)
+	if err != nil {
+		http.Error(w, "Failed to read JS file", http.StatusInternalServerError)
+		h.logger.Error("Failed to read JS file: %w", err)
+		return
+	}
+
+	tplDataFull, err := uiTemplateDataFromConfig(cfg)
+	if err != nil {
+		http.Error(w, "Failed to load template data", http.StatusInternalServerError)
+		h.logger.Error("Failed to load template data: %w", err)
+		return
+	}
+	if h.transform != nil {
+		if err := h.transform(tplDataFull); err != nil {
+			http.Error(w, "Failed to run transform", http.StatusInternalServerError)
+			h.logger.Error("Failed to run transform: %w", err)
+			return
+		}
+	}
+	contentPath, isSuccess := tplDataFull["ContentPath"].(string)
+
+	if !isSuccess {
+		http.Error(w, "ContentPath value not found in template data", http.StatusInternalServerError)
+		h.logger.Error("ContentPath value not found in template data")
+		return
+	}
+	js := string(content)
+	js = strings.ReplaceAll(js, "{{.ContentPath}}", contentPath)
+	w.Header().Set("Content-Type", "application/javascript")
+	if _, err := w.Write([]byte(js)); err != nil {
+		h.logger.Error("Failed to write JS response: %w", err)
+	}
 }

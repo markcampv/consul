@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package config
@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	hcpconfig "github.com/hashicorp/consul/agent/hcp/config"
+	"github.com/hashicorp/consul/agent/structs"
 	"github.com/hashicorp/consul/types"
 )
 
@@ -48,6 +48,16 @@ func TestLoad(t *testing.T) {
 	require.NotNil(t, cfg)
 	require.Equal(t, "hobbiton", cfg.NodeName)
 	require.Equal(t, 1*time.Millisecond, cfg.CheckReapInterval)
+	require.Equal(t, DefaultHTTPMaxRequestBodySize, cfg.HTTPMaxRequestBodySize)
+}
+
+func TestLoad_HTTPMaxRequestBodySizeMustBePositive(t *testing.T) {
+	devMode := true
+	_, err := Load(LoadOpts{
+		DevMode: &devMode,
+		HCL:     []string{"limits { http_max_request_body_size = 0 }"},
+	})
+	require.ErrorContains(t, err, "limits.http_max_request_body_size must be strictly positive")
 }
 
 func TestShouldParseFile(t *testing.T) {
@@ -312,6 +322,54 @@ func TestBuilder_DurationVal_InvalidDuration(t *testing.T) {
 	require.Contains(t, b.err.Error(), badDuration2)
 }
 
+func TestLoad_FederationStateAntiEntropySyncInterval_Valid(t *testing.T) {
+	devMode := true
+	opts := LoadOpts{
+		DevMode: &devMode,
+		Overrides: []Source{
+			FileSource{
+				Name:   "overrides",
+				Format: "hcl",
+				Data: `
+				node_name = "test"
+				data_dir = "dir"
+				federation_state_anti_entropy_sync_interval = "250ms"
+				`,
+			},
+		},
+	}
+	patchLoadOptsShims(&opts)
+
+	result, err := Load(opts)
+	require.NoError(t, err)
+	require.NotNil(t, result.RuntimeConfig)
+	require.Equal(t, 250*time.Millisecond, result.RuntimeConfig.FederationStateAntiEntropySyncInterval)
+}
+
+func TestLoad_FederationStateAntiEntropySyncInterval_Invalid(t *testing.T) {
+	devMode := true
+	opts := LoadOpts{
+		DevMode: &devMode,
+		Overrides: []Source{
+			FileSource{
+				Name:   "overrides",
+				Format: "hcl",
+				Data: `
+				node_name = "test"
+				data_dir = "dir"
+				federation_state_anti_entropy_sync_interval = "not-a-duration"
+				`,
+			},
+		},
+	}
+	patchLoadOptsShims(&opts)
+
+	_, err := Load(opts)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "federation_state_anti_entropy_sync_interval")
+	require.Contains(t, err.Error(), "invalid duration")
+}
+
 func TestBuilder_DurationValWithDefaultMin(t *testing.T) {
 	b := builder{}
 
@@ -344,6 +402,246 @@ func TestBuilder_ServiceVal_MultiError(t *testing.T) {
 	require.Contains(t, b.err.Error(), "Key cannot be blank")
 	require.Contains(t, b.err.Error(), "Invalid weight")
 	require.Contains(t, b.err.Error(), "cannot have both socket path")
+}
+
+func TestBuilder_DurationVal_EdgeCases(t *testing.T) {
+	testCases := []struct {
+		name        string
+		input       string
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:        "negative duration",
+			input:       "-5s",
+			expectError: false, // time.ParseDuration allows negative durations
+		},
+		{
+			name:        "zero duration",
+			input:       "0s",
+			expectError: false,
+		},
+		{
+			name:        "unparseable string - no unit",
+			input:       "123",
+			expectError: true,
+			errorMsg:    "time: missing unit in duration",
+		},
+		{
+			name:        "unparseable string - invalid unit",
+			input:       "5x",
+			expectError: true,
+			errorMsg:    "unknown unit",
+		},
+		{
+			name:        "unparseable string - empty",
+			input:       "",
+			expectError: true,
+			errorMsg:    "invalid duration",
+		},
+		{
+			name:        "unparseable string - just letters",
+			input:       "abc",
+			expectError: true,
+			errorMsg:    "invalid duration",
+		},
+		{
+			name:        "unparseable string - mixed invalid",
+			input:       "5s10x",
+			expectError: true,
+			errorMsg:    "unknown unit",
+		},
+		{
+			name:        "very large duration",
+			input:       "8760h", // 1 year in hours
+			expectError: false,
+		},
+		{
+			name:        "fractional seconds",
+			input:       "1.5s",
+			expectError: false,
+		},
+		{
+			name:        "complex valid duration",
+			input:       "1h30m45s",
+			expectError: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := builder{}
+			result := b.durationVal("test_field", &tc.input)
+
+			if tc.expectError {
+				require.Error(t, b.err)
+				require.Contains(t, b.err.Error(), tc.errorMsg)
+				require.Equal(t, time.Duration(0), result)
+			} else {
+				require.NoError(t, b.err)
+				switch tc.input {
+				case "-5s":
+					require.Equal(t, -5*time.Second, result)
+				case "0s":
+					require.Equal(t, time.Duration(0), result)
+				case "8760h":
+					require.Equal(t, 8760*time.Hour, result)
+				case "1.5s":
+					require.Equal(t, 1500*time.Millisecond, result)
+				case "1h30m45s":
+					expected := time.Hour + 30*time.Minute + 45*time.Second
+					require.Equal(t, expected, result)
+				}
+			}
+		})
+	}
+}
+
+func TestBuilder_DurationValWithDefaultMin_EdgeCases(t *testing.T) {
+	testCases := []struct {
+		name        string
+		input       *string
+		defaultVal  time.Duration
+		minVal      time.Duration
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:        "nil input uses default",
+			input:       nil,
+			defaultVal:  10 * time.Second,
+			minVal:      5 * time.Second,
+			expectError: false,
+		},
+		{
+			name:        "negative duration below minimum",
+			input:       strPtr("-10s"),
+			defaultVal:  10 * time.Second,
+			minVal:      0,
+			expectError: true,
+			errorMsg:    "cannot be less than",
+		},
+		{
+			name:        "zero duration below minimum",
+			input:       strPtr("0s"),
+			defaultVal:  10 * time.Second,
+			minVal:      5 * time.Second,
+			expectError: true,
+			errorMsg:    "cannot be less than",
+		},
+		{
+			name:        "valid duration above minimum",
+			input:       strPtr("30s"),
+			defaultVal:  10 * time.Second,
+			minVal:      5 * time.Second,
+			expectError: false,
+		},
+		{
+			name:        "duration exactly at minimum",
+			input:       strPtr("5s"),
+			defaultVal:  10 * time.Second,
+			minVal:      5 * time.Second,
+			expectError: false,
+		},
+		{
+			name:        "unparseable duration with minimum check",
+			input:       strPtr("invalid"),
+			defaultVal:  10 * time.Second,
+			minVal:      5 * time.Second,
+			expectError: true,
+			errorMsg:    "invalid duration",
+		},
+		{
+			name:        "very small duration below microsecond minimum",
+			input:       strPtr("1ns"),
+			defaultVal:  0,
+			minVal:      time.Microsecond,
+			expectError: true,
+			errorMsg:    "cannot be less than",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := builder{}
+			result := b.durationValWithDefaultMin("test_field", tc.input, tc.defaultVal, tc.minVal)
+
+			if tc.expectError {
+				require.Error(t, b.err)
+				require.Contains(t, b.err.Error(), tc.errorMsg)
+			} else {
+				require.NoError(t, b.err)
+				if tc.input == nil {
+					require.Equal(t, tc.defaultVal, result)
+				} else if *tc.input == "30s" {
+					require.Equal(t, 30*time.Second, result)
+				} else if *tc.input == "5s" {
+					require.Equal(t, 5*time.Second, result)
+				}
+			}
+		})
+	}
+}
+
+func TestBuilder_DurationValWithDefault_EdgeCases(t *testing.T) {
+	testCases := []struct {
+		name        string
+		input       *string
+		defaultVal  time.Duration
+		expectError bool
+		expected    time.Duration
+	}{
+		{
+			name:        "nil input returns default",
+			input:       nil,
+			defaultVal:  15 * time.Minute,
+			expectError: false,
+			expected:    15 * time.Minute,
+		},
+		{
+			name:        "empty string input",
+			input:       strPtr(""),
+			defaultVal:  15 * time.Minute,
+			expectError: true,
+			expected:    time.Duration(0),
+		},
+		{
+			name:        "negative duration with default",
+			input:       strPtr("-1h"),
+			defaultVal:  15 * time.Minute,
+			expectError: false,
+			expected:    -time.Hour,
+		},
+		{
+			name:        "zero duration overrides default",
+			input:       strPtr("0s"),
+			defaultVal:  15 * time.Minute,
+			expectError: false,
+			expected:    time.Duration(0),
+		},
+		{
+			name:        "valid duration overrides default",
+			input:       strPtr("2h30m"),
+			defaultVal:  15 * time.Minute,
+			expectError: false,
+			expected:    2*time.Hour + 30*time.Minute,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := builder{}
+			result := b.durationValWithDefault("test_field", tc.input, tc.defaultVal)
+
+			if tc.expectError {
+				require.Error(t, b.err)
+				require.Equal(t, time.Duration(0), result)
+			} else {
+				require.NoError(t, b.err)
+				require.Equal(t, tc.expected, result)
+			}
+		})
+	}
 }
 
 func TestBuilder_ServiceVal_with_Check(t *testing.T) {
@@ -507,6 +805,116 @@ func TestBuilder_tlsCipherSuites(t *testing.T) {
 	require.Contains(t, b.err.Error(), "cipher suites are not configurable")
 }
 
+func TestBuilder_tlsECDHCurves(t *testing.T) {
+	b := builder{}
+
+	validCurves := strings.Join([]string{
+		"X25519MLKEM768",
+		"X25519",
+		"P-256",
+		"P-384",
+		"P-521",
+	}, ",")
+	got := b.tlsECDHCurves("tls.defaults.tls_ecdh_curves", &validCurves, types.TLSv1_2)
+	require.NoError(t, b.err)
+	require.Equal(t, []types.TLSECDHCurve{
+		types.CurveX25519MLKEM768,
+		types.CurveX25519,
+		types.CurveP256,
+		types.CurveP384,
+		types.CurveP521,
+	}, got)
+
+	// Valid with TLS 1.3
+	got13 := b.tlsECDHCurves("tls.defaults.tls_ecdh_curves", &validCurves, types.TLSv1_3)
+	require.NoError(t, b.err)
+	require.Len(t, got13, 5)
+
+	// Invalid curve name
+	invalidCurves := "curveX,X25519"
+	b.tlsECDHCurves("tls.defaults.tls_ecdh_curves", &invalidCurves, types.TLSv1_2)
+
+	// Incompatible with legacy TLS version
+	b.tlsECDHCurves("tls.defaults.tls_ecdh_curves", &validCurves, types.TLSv1_1)
+	b.tlsECDHCurves("tls.defaults.tls_ecdh_curves", &validCurves, types.TLSv1_0)
+
+	require.Error(t, b.err)
+	require.Contains(t, b.err.Error(), "3 errors")
+	require.Contains(t, b.err.Error(), "no matching Consul Agent TLS curve found for curveX")
+	require.Contains(t, b.err.Error(), "ecdh_curves can only be configured when tls_min_version is 'TLSv1_2' or higher")
+}
+
+func TestBuilder_buildTLSConfig_ECDHCurves(t *testing.T) {
+	strPtr := func(s string) *string { return &s }
+
+	t.Run("defaults inherited and overridden", func(t *testing.T) {
+		b := builder{}
+		cfg := TLS{
+			Defaults: TLSProtocolConfig{
+				TLSMinVersion: strPtr("TLSv1_2"),
+				TLSECDHCurves: strPtr("P-256,P-384"),
+			},
+			InternalRPC: TLSProtocolConfig{
+				TLSECDHCurves: strPtr("X25519MLKEM768,X25519"),
+			},
+			HTTPS: TLSProtocolConfig{
+				// inherits defaults
+			},
+		}
+
+		res, err := b.buildTLSConfig(RuntimeConfig{}, cfg)
+		require.NoError(t, err)
+		require.Equal(t, []types.TLSECDHCurve{types.CurveX25519MLKEM768, types.CurveX25519}, res.InternalRPC.ECDHCurves)
+		require.Equal(t, []types.TLSECDHCurve{types.CurveP256, types.CurveP384}, res.HTTPS.ECDHCurves)
+		require.Equal(t, []types.TLSECDHCurve{types.CurveP256, types.CurveP384}, res.GRPC.ECDHCurves)
+	})
+
+	t.Run("auto injection when TLSv1_3 and curves unspecified", func(t *testing.T) {
+		b := builder{}
+		cfg := TLS{
+			Defaults: TLSProtocolConfig{
+				TLSMinVersion: strPtr("TLSv1_3"),
+			},
+			InternalRPC: TLSProtocolConfig{
+				// inherits TLSv1_3 and gets auto-injected curves
+			},
+			HTTPS: TLSProtocolConfig{
+				// explicit override curve
+				TLSECDHCurves: strPtr("P-256"),
+			},
+		}
+
+		res, err := b.buildTLSConfig(RuntimeConfig{}, cfg)
+		require.NoError(t, err)
+		pqcDefaults := []types.TLSECDHCurve{types.CurveX25519MLKEM768, types.CurveX25519, types.CurveP256}
+		require.Equal(t, pqcDefaults, res.InternalRPC.ECDHCurves)
+		require.Equal(t, pqcDefaults, res.GRPC.ECDHCurves)
+		require.Equal(t, []types.TLSECDHCurve{types.CurveP256}, res.HTTPS.ECDHCurves)
+
+		// The injected slice must not alias the package-level default.
+		res.InternalRPC.ECDHCurves[0] = "mutated"
+		require.Equal(t, pqcDefaults, types.DefaultConsulAgentPQCECDHCurves)
+	})
+
+	t.Run("safe omit curves on legacy override", func(t *testing.T) {
+		b := builder{}
+		cfg := TLS{
+			Defaults: TLSProtocolConfig{
+				TLSMinVersion: strPtr("TLSv1_2"),
+				TLSECDHCurves: strPtr("X25519"),
+			},
+			HTTPS: TLSProtocolConfig{
+				TLSMinVersion: strPtr("TLSv1_0"),
+			},
+		}
+
+		res, err := b.buildTLSConfig(RuntimeConfig{}, cfg)
+		require.NoError(t, err)
+		require.Equal(t, []types.TLSECDHCurve{types.CurveX25519}, res.InternalRPC.ECDHCurves)
+		require.Empty(t, res.HTTPS.ECDHCurves)
+	})
+}
+
 func TestBuilder_parsePrefixFilter(t *testing.T) {
 	t.Run("Check that 1.12 rpc metrics are parsed correctly.", func(t *testing.T) {
 		type testCase struct {
@@ -556,25 +964,6 @@ func TestBuilder_parsePrefixFilter(t *testing.T) {
 			})
 		}
 	})
-}
-
-func TestBuidler_hostMetricsWithCloud(t *testing.T) {
-	devMode := true
-	builderOpts := LoadOpts{
-		DevMode: &devMode,
-		DefaultConfig: FileSource{
-			Name:   "test",
-			Format: "hcl",
-			Data:   `cloud{ resource_id = "abc" client_id = "abc" client_secret = "abc"}`,
-		},
-	}
-
-	result, err := Load(builderOpts)
-	require.NoError(t, err)
-	require.Empty(t, result.Warnings)
-	cfg := result.RuntimeConfig
-	require.NotNil(t, cfg)
-	require.True(t, cfg.Telemetry.EnableHostMetrics)
 }
 
 func TestBuilder_CheckExperimentsInSecondaryDatacenters(t *testing.T) {
@@ -627,109 +1016,50 @@ func TestBuilder_CheckExperimentsInSecondaryDatacenters(t *testing.T) {
 	}
 }
 
-func TestBuilder_CloudConfigWithEnvironmentVars(t *testing.T) {
-	tests := map[string]struct {
-		hcl      string
-		env      map[string]string
-		expected hcpconfig.CloudConfig
-	}{
-		"ConfigurationOnly": {
-			hcl: `cloud{ resource_id = "config-resource-id" client_id = "config-client-id"
-			client_secret = "config-client-secret" auth_url = "auth.config.com"
-			hostname = "api.config.com" scada_address = "scada.config.com"}`,
-			expected: hcpconfig.CloudConfig{
-				ResourceID:   "config-resource-id",
-				ClientID:     "config-client-id",
-				ClientSecret: "config-client-secret",
-				AuthURL:      "auth.config.com",
-				Hostname:     "api.config.com",
-				ScadaAddress: "scada.config.com",
-			},
-		},
-		"EnvVarsOnly": {
-			env: map[string]string{
-				"HCP_RESOURCE_ID":   "env-resource-id",
-				"HCP_CLIENT_ID":     "env-client-id",
-				"HCP_CLIENT_SECRET": "env-client-secret",
-				"HCP_AUTH_URL":      "auth.env.com",
-				"HCP_API_ADDRESS":   "api.env.com",
-				"HCP_SCADA_ADDRESS": "scada.env.com",
-			},
-			expected: hcpconfig.CloudConfig{
-				ResourceID:   "env-resource-id",
-				ClientID:     "env-client-id",
-				ClientSecret: "env-client-secret",
-				AuthURL:      "auth.env.com",
-				Hostname:     "api.env.com",
-				ScadaAddress: "scada.env.com",
-			},
-		},
-		"EnvVarsOverrideConfig": {
-			hcl: `cloud{ resource_id = "config-resource-id" client_id = "config-client-id"
-			client_secret = "config-client-secret" auth_url = "auth.config.com"
-			hostname = "api.config.com" scada_address = "scada.config.com"}`,
-			env: map[string]string{
-				"HCP_RESOURCE_ID":   "env-resource-id",
-				"HCP_CLIENT_ID":     "env-client-id",
-				"HCP_CLIENT_SECRET": "env-client-secret",
-				"HCP_AUTH_URL":      "auth.env.com",
-				"HCP_API_ADDRESS":   "api.env.com",
-				"HCP_SCADA_ADDRESS": "scada.env.com",
-			},
-			expected: hcpconfig.CloudConfig{
-				ResourceID:   "env-resource-id",
-				ClientID:     "env-client-id",
-				ClientSecret: "env-client-secret",
-				AuthURL:      "auth.env.com",
-				Hostname:     "api.env.com",
-				ScadaAddress: "scada.env.com",
-			},
-		},
-		"Combination": {
-			hcl: `cloud{ resource_id = "config-resource-id" client_id = "config-client-id"
-				client_secret = "config-client-secret"}`,
-			env: map[string]string{
-				"HCP_AUTH_URL":      "auth.env.com",
-				"HCP_API_ADDRESS":   "api.env.com",
-				"HCP_SCADA_ADDRESS": "scada.env.com",
-			},
-			expected: hcpconfig.CloudConfig{
-				ResourceID:   "config-resource-id",
-				ClientID:     "config-client-id",
-				ClientSecret: "config-client-secret",
-				AuthURL:      "auth.env.com",
-				Hostname:     "api.env.com",
-				ScadaAddress: "scada.env.com",
-			},
-		},
-	}
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			for k, v := range tc.env {
-				t.Setenv(k, v)
-			}
-			devMode := true
-			builderOpts := LoadOpts{
-				DevMode: &devMode,
-				Overrides: []Source{
-					FileSource{
-						Name:   "overrides",
-						Format: "hcl",
-						Data:   tc.hcl,
-					},
-				},
-			}
-			loaded, err := Load(builderOpts)
-			require.NoError(t, err)
-
-			nodeName, err := os.Hostname()
-			require.NoError(t, err)
-			tc.expected.NodeName = nodeName
-
-			actual := loaded.RuntimeConfig.Cloud
-			require.Equal(t, tc.expected, actual)
+func TestBuilder_FeatureGatesBootstrap(t *testing.T) {
+	t.Run("server accepts known feature", func(t *testing.T) {
+		devMode := true
+		result, err := Load(LoadOpts{
+			DevMode: &devMode,
+			HCL: []string{`
+				feature_gates {
+					bootstrap = { "api-gateway-upstream-routing" = true }
+				}
+			`},
 		})
-	}
+		require.NoError(t, err)
+		require.Equal(t, map[string]bool{"api-gateway-upstream-routing": true}, result.RuntimeConfig.FeatureGatesBootstrap)
+	})
+
+	t.Run("client rejects bootstrap", func(t *testing.T) {
+		devMode := false
+		opts := LoadOpts{
+			DevMode: &devMode,
+			HCL: []string{`
+				server = false
+				data_dir = "/tmp/consul-feature-gates-client-test"
+				feature_gates {
+					bootstrap = { "api-gateway-upstream-routing" = true }
+				}
+			`},
+		}
+		patchLoadOptsShims(&opts)
+		_, err := Load(opts)
+		require.ErrorContains(t, err, "feature_gates.bootstrap requires server = true")
+	})
+
+	t.Run("rejects unknown feature", func(t *testing.T) {
+		devMode := true
+		_, err := Load(LoadOpts{
+			DevMode: &devMode,
+			HCL: []string{`
+				feature_gates {
+					bootstrap = { "not-registered" = true }
+				}
+			`},
+		})
+		require.ErrorContains(t, err, `feature_gates.bootstrap contains unknown feature "not-registered"`)
+	})
 }
 
 func TestBuilder_DatacenterDNSCompatibleWarning(t *testing.T) {
@@ -844,4 +1174,72 @@ func TestBuilder_DatacenterDNSCompatibleWarning(t *testing.T) {
 			fn(t, tc)
 		})
 	}
+}
+
+// TestBuilder_serviceKindVal covers the agent-config `services { kind = ... }`
+// mapping. An unrecognized kind silently degrades to "typical" rather than
+// erroring, so a gateway kind missing from this switch would register as a plain
+// service with no proxy behaviour and no warning.
+func TestBuilder_serviceKindVal(t *testing.T) {
+	b := &builder{}
+
+	for _, kind := range []structs.ServiceKind{
+		structs.ServiceKindConnectProxy,
+		structs.ServiceKindMeshGateway,
+		structs.ServiceKindTerminatingGateway,
+		structs.ServiceKindIngressGateway,
+		structs.ServiceKindAPIGateway,
+		structs.ServiceKindInferenceGateway,
+	} {
+		t.Run(string(kind), func(t *testing.T) {
+			s := string(kind)
+			require.Equal(t, kind, b.serviceKindVal(&s))
+		})
+	}
+
+	t.Run("nil is typical", func(t *testing.T) {
+		require.Equal(t, structs.ServiceKindTypical, b.serviceKindVal(nil))
+	})
+
+	t.Run("unknown is typical", func(t *testing.T) {
+		s := "not-a-kind"
+		require.Equal(t, structs.ServiceKindTypical, b.serviceKindVal(&s))
+	})
+}
+
+func TestLoad_BootstrapMeshECDHCurvesWithoutP256Warns(t *testing.T) {
+	devMode := true
+	result, err := Load(LoadOpts{
+		DevMode: &devMode,
+		HCL: []string{`
+config_entries {
+  bootstrap = [
+    {
+      kind = "mesh"
+      tls {
+        incoming {
+          tls_min_version = "TLSv1_2"
+          ecdh_curves     = ["X25519MLKEM768", "X25519"]
+        }
+        outgoing {
+          tls_min_version = "TLSv1_2"
+          ecdh_curves     = ["X25519MLKEM768", "X25519"]
+        }
+      }
+    }
+  ]
+}`},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.RuntimeConfig.ConfigEntryBootstrap, 1)
+
+	var p256Warnings []string
+	for _, w := range result.Warnings {
+		if strings.Contains(w, `does not include "P-256"`) {
+			p256Warnings = append(p256Warnings, w)
+		}
+	}
+	require.Len(t, p256Warnings, 2)
+	require.Contains(t, p256Warnings[0], "config_entries.bootstrap[0]: mesh TLS.Incoming.ECDHCurves")
+	require.Contains(t, p256Warnings[1], "config_entries.bootstrap[0]: mesh TLS.Outgoing.ECDHCurves")
 }

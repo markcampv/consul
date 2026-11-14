@@ -1,16 +1,17 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package fsm
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 
-	"github.com/hashicorp/raft"
-	"github.com/mitchellh/mapstructure"
+	"github.com/go-viper/mapstructure/v2"
 
 	"github.com/hashicorp/consul-net-rpc/go-msgpack/codec"
+	"github.com/hashicorp/raft"
 
 	"github.com/hashicorp/consul/agent/consul/state"
 	"github.com/hashicorp/consul/agent/structs"
@@ -26,6 +27,8 @@ func init() {
 	registerRestorer(structs.CoordinateBatchUpdateType, restoreCoordinates)
 	registerRestorer(structs.PreparedQueryRequestType, restorePreparedQuery)
 	registerRestorer(structs.AutopilotRequestType, restoreAutopilot)
+	// Legacy dev-build snapshot record; current snapshots use a system-metadata entry.
+	registerRestorer(structs.FeatureGateRequestType, restoreFeatureGates)
 	registerRestorer(structs.IntentionRequestType, restoreLegacyIntention)
 	registerRestorer(structs.ConnectCARequestType, restoreConnectCA)
 	registerRestorer(structs.ConnectCAProviderStateType, restoreConnectCAProviderState)
@@ -69,6 +72,9 @@ func persistCE(s *snapshot, sink raft.SnapshotSink, encoder *codec.Encoder) erro
 		return err
 	}
 	if err := s.persistAutopilot(sink, encoder); err != nil {
+		return err
+	}
+	if err := s.persistFeatureGates(sink, encoder); err != nil {
 		return err
 	}
 	if err := s.persistLegacyIntentions(sink, encoder); err != nil {
@@ -363,6 +369,32 @@ func (s *snapshot) persistAutopilot(sink raft.SnapshotSink,
 		return err
 	}
 	return nil
+}
+
+func (s *snapshot) persistFeatureGates(sink raft.SnapshotSink, encoder *codec.Encoder) error {
+	featureGates, err := s.state.FeatureGates()
+	if err != nil {
+		return err
+	}
+	if featureGates == nil {
+		return nil
+	}
+	value, err := json.Marshal(featureGates)
+	if err != nil {
+		return fmt.Errorf("failed encoding feature-gate state: %w", err)
+	}
+	// A system-metadata record is restorable by servers that predate the framework.
+	entry := &structs.SystemMetadataEntry{
+		Key:   structs.SystemMetadataFeatureGatesStateKey,
+		Value: string(value),
+	}
+	if featureGates.Status != nil {
+		entry.ModifyIndex = featureGates.Status.ModifyIndex
+	}
+	if _, err := sink.Write([]byte{byte(structs.SystemMetadataRequestType)}); err != nil {
+		return err
+	}
+	return encoder.Encode(entry)
 }
 
 func (s *snapshot) persistConnectCA(sink raft.SnapshotSink,
@@ -716,6 +748,14 @@ func restoreAutopilot(header *SnapshotHeader, restore *state.Restore, decoder *c
 	return nil
 }
 
+func restoreFeatureGates(_ *SnapshotHeader, restore *state.Restore, decoder *codec.Decoder) error {
+	var snapshot structs.FeatureGateSnapshot
+	if err := decoder.Decode(&snapshot); err != nil {
+		return err
+	}
+	return restore.FeatureGates(&snapshot)
+}
+
 func restoreLegacyIntention(header *SnapshotHeader, restore *state.Restore, decoder *codec.Decoder) error {
 	var req structs.Intention
 	if err := decoder.Decode(&req); err != nil {
@@ -794,6 +834,9 @@ func restoreConfigEntry(header *SnapshotHeader, restore *state.Restore, decoder 
 	if err := decoder.Decode(&req); err != nil {
 		return err
 	}
+	if structs.CEDowngrade {
+		stripEnterpriseOnlyConfigEntryFields(req.Entry)
+	}
 	return restore.ConfigEntry(req.Entry)
 }
 
@@ -833,6 +876,13 @@ func restoreSystemMetadata(header *SnapshotHeader, restore *state.Restore, decod
 	var req structs.SystemMetadataEntry
 	if err := decoder.Decode(&req); err != nil {
 		return err
+	}
+	if req.Key == structs.SystemMetadataFeatureGatesStateKey {
+		var gates structs.FeatureGateSnapshot
+		if err := json.Unmarshal([]byte(req.Value), &gates); err != nil {
+			return fmt.Errorf("failed decoding feature-gate state: %w", err)
+		}
+		return restore.FeatureGates(&gates)
 	}
 	return restore.SystemMetadataEntry(&req)
 }

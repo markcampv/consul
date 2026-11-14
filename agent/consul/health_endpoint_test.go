@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package consul
@@ -13,6 +13,7 @@ import (
 
 	msgpackrpc "github.com/hashicorp/consul-net-rpc/net-rpc-msgpackrpc"
 
+	"github.com/hashicorp/consul/agent/netutil"
 	"github.com/hashicorp/consul/agent/structs"
 	"github.com/hashicorp/consul/api"
 	"github.com/hashicorp/consul/internal/gossip/librtt"
@@ -1080,7 +1081,7 @@ node "foo" {
 
 		// Register a service
 		args := structs.TestRegisterRequestProxy(t)
-		args.WriteRequest.Token = "root"
+		args.Token = "root"
 		args.Service.ID = "foo-proxy-0"
 		args.Service.Service = "foo-proxy"
 		args.Service.Proxy.DestinationServiceName = "bar"
@@ -1093,7 +1094,7 @@ node "foo" {
 
 		// Register a service
 		args = structs.TestRegisterRequestProxy(t)
-		args.WriteRequest.Token = "root"
+		args.Token = "root"
 		args.Service.Service = "foo-proxy"
 		args.Service.Proxy.DestinationServiceName = "foo"
 		args.Check = &structs.HealthCheck{
@@ -1105,7 +1106,7 @@ node "foo" {
 
 		// Register a service
 		args = structs.TestRegisterRequestProxy(t)
-		args.WriteRequest.Token = "root"
+		args.Token = "root"
 		args.Service.Service = "another-proxy"
 		args.Service.Proxy.DestinationServiceName = "foo"
 		args.Check = &structs.HealthCheck{
@@ -1141,6 +1142,7 @@ node "foo" {
 }
 
 func TestHealth_ServiceNodes_Gateway(t *testing.T) {
+	netutil.GetAgentBindAddrFunc = netutil.GetMockGetAgentBindAddrFunc("0.0.0.0")
 	if testing.Short() {
 		t.Skip("too slow for testing.Short")
 	}
@@ -1494,6 +1496,231 @@ func TestHealth_ServiceNodes_Ingress_ACL(t *testing.T) {
 	require.Equal(t, nodes[1].Checks[0].Status, api.HealthPassing)
 }
 
+// setupAPIGatewayDNSMapping writes, directly into the leader's state store, the
+// api-gateway / http-route / bound-api-gateway config entries needed to
+// materialize a gateway<->service mapping (gateway "api-gw" fronting
+// serviceName). This mirrors what the API gateway controller produces, but does
+// so deterministically so the Health.ServiceNodes RPC can be exercised without
+// depending on controller timing.
+func setupAPIGatewayDNSMapping(t *testing.T, s *Server, serviceName string) {
+	t.Helper()
+	store := s.fsm.State()
+
+	var idx uint64 = 1
+	next := func() uint64 { idx++; return idx }
+
+	require.NoError(t, store.EnsureConfigEntry(next(), &structs.ProxyConfigEntry{
+		Kind:   structs.ProxyDefaults,
+		Name:   structs.ProxyConfigGlobal,
+		Config: map[string]interface{}{"protocol": "http"},
+	}))
+	require.NoError(t, store.EnsureConfigEntry(next(), &structs.APIGatewayConfigEntry{
+		Kind: structs.APIGateway,
+		Name: "api-gw",
+		Listeners: []structs.APIGatewayListener{
+			{Name: "http-listener", Port: 8443, Protocol: structs.ListenerProtocolHTTP},
+		},
+	}))
+	require.NoError(t, store.EnsureConfigEntry(next(), &structs.HTTPRouteConfigEntry{
+		Kind:    structs.HTTPRoute,
+		Name:    "route-" + serviceName,
+		Parents: []structs.ResourceReference{{Kind: structs.APIGateway, Name: "api-gw"}},
+		Rules: []structs.HTTPRouteRule{
+			{Services: []structs.HTTPService{{Name: serviceName}}},
+		},
+	}))
+	require.NoError(t, store.EnsureConfigEntry(next(), &structs.BoundAPIGatewayConfigEntry{
+		Kind: structs.BoundAPIGateway,
+		Name: "api-gw",
+		Listeners: []structs.BoundAPIGatewayListener{
+			{
+				Name:   "http-listener",
+				Routes: []structs.ResourceReference{{Kind: structs.HTTPRoute, Name: "route-" + serviceName}},
+			},
+		},
+	}))
+}
+
+// TestHealth_ServiceNodes_APIGateway verifies that a Health.ServiceNodes query
+// with APIGateway=true resolves the service through the gateway-services mapping
+// and returns the API gateway instances (with their health) that front it, the
+// API gateway analog of TestHealth_ServiceNodes_Ingress.
+func TestHealth_ServiceNodes_APIGateway(t *testing.T) {
+	if testing.Short() {
+		t.Skip("too slow for testing.Short")
+	}
+
+	t.Parallel()
+	dir1, s1 := testServer(t)
+	defer os.RemoveAll(dir1)
+	defer s1.Shutdown()
+	codec := rpcClient(t, s1)
+	defer codec.Close()
+
+	testrpc.WaitForLeader(t, s1.RPC, "dc1")
+
+	// Register two API gateway instances with differing health.
+	require.NoError(t, s1.fsm.State().EnsureRegistration(10, &structs.RegisterRequest{
+		Node:    "foo",
+		Address: "127.0.0.1",
+		Service: &structs.NodeService{
+			ID:      "api-gw",
+			Service: "api-gw",
+			Kind:    structs.ServiceKindAPIGateway,
+		},
+		Check: &structs.HealthCheck{
+			Node:      "foo",
+			CheckID:   "foo-api-gw",
+			Name:      "api-gateway",
+			Status:    api.HealthPassing,
+			ServiceID: "api-gw",
+		},
+	}))
+	require.NoError(t, s1.fsm.State().EnsureRegistration(11, &structs.RegisterRequest{
+		Node:    "bar",
+		Address: "127.0.0.2",
+		Service: &structs.NodeService{
+			ID:      "api-gw",
+			Service: "api-gw",
+			Kind:    structs.ServiceKindAPIGateway,
+		},
+		Check: &structs.HealthCheck{
+			Node:      "bar",
+			CheckID:   "bar-api-gw",
+			Name:      "api-gateway",
+			Status:    api.HealthWarning,
+			ServiceID: "api-gw",
+		},
+	}))
+
+	setupAPIGatewayDNSMapping(t, s1, "db")
+
+	// retry to tolerate the API gateway controller idempotently re-reconciling
+	// the bound-api-gateway entry we wrote directly.
+	retry.Run(t, func(r *retry.R) {
+		var out structs.IndexedCheckServiceNodes
+		req := structs.ServiceSpecificRequest{
+			Datacenter:  "dc1",
+			ServiceName: "db",
+			APIGateway:  true,
+		}
+		require.NoError(r, msgpackrpc.CallWithCodec(codec, "Health.ServiceNodes", &req, &out))
+		require.Len(r, out.Nodes, 2)
+
+		byNode := make(map[string]string)
+		for _, n := range out.Nodes {
+			byNode[n.Node.Node] = n.Checks[0].Status
+		}
+		require.Equal(r, api.HealthPassing, byNode["foo"])
+		require.Equal(r, api.HealthWarning, byNode["bar"])
+	})
+}
+
+// TestHealth_ServiceNodes_APIGateway_ACL verifies that API gateway DNS queries
+// enforce service:read on the fronted service, mirroring the ingress behavior.
+func TestHealth_ServiceNodes_APIGateway_ACL(t *testing.T) {
+	if testing.Short() {
+		t.Skip("too slow for testing.Short")
+	}
+
+	t.Parallel()
+	dir1, s1 := testServerWithConfig(t, func(c *Config) {
+		c.PrimaryDatacenter = "dc1"
+		c.ACLsEnabled = true
+		c.ACLInitialManagementToken = "root"
+		c.ACLResolverSettings.ACLDefaultPolicy = "deny"
+	})
+	defer os.RemoveAll(dir1)
+	defer s1.Shutdown()
+	codec := rpcClient(t, s1)
+	defer codec.Close()
+
+	testrpc.WaitForLeader(t, s1.RPC, "dc1", testrpc.WithToken("root"))
+
+	// Token can read "db" and the gateway, but not "another".
+	token, err := upsertTestTokenWithPolicyRules(codec, "root", "dc1", `
+  service "db" { policy = "read" }
+	service "api-gw" { policy = "read" }
+	node_prefix "" { policy = "read" }`)
+	require.NoError(t, err)
+
+	require.NoError(t, s1.fsm.State().EnsureRegistration(10, &structs.RegisterRequest{
+		Node:    "foo",
+		Address: "127.0.0.1",
+		Service: &structs.NodeService{
+			ID:      "api-gw",
+			Service: "api-gw",
+			Kind:    structs.ServiceKindAPIGateway,
+		},
+		Check: &structs.HealthCheck{
+			Node:      "foo",
+			CheckID:   "foo-api-gw",
+			Name:      "api-gateway",
+			Status:    api.HealthPassing,
+			ServiceID: "api-gw",
+		},
+	}))
+
+	// Map both "db" and "another" behind the gateway.
+	setupAPIGatewayDNSMapping(t, s1, "db")
+	require.NoError(t, s1.fsm.State().EnsureConfigEntry(100, &structs.HTTPRouteConfigEntry{
+		Kind:    structs.HTTPRoute,
+		Name:    "route-another",
+		Parents: []structs.ResourceReference{{Kind: structs.APIGateway, Name: "api-gw"}},
+		Rules: []structs.HTTPRouteRule{
+			{Services: []structs.HTTPService{{Name: "another"}}},
+		},
+	}))
+	require.NoError(t, s1.fsm.State().EnsureConfigEntry(101, &structs.BoundAPIGatewayConfigEntry{
+		Kind: structs.BoundAPIGateway,
+		Name: "api-gw",
+		Listeners: []structs.BoundAPIGatewayListener{
+			{
+				Name: "http-listener",
+				Routes: []structs.ResourceReference{
+					{Kind: structs.HTTPRoute, Name: "route-db"},
+					{Kind: structs.HTTPRoute, Name: "route-another"},
+				},
+			},
+		},
+	}))
+
+	var out structs.IndexedCheckServiceNodes
+
+	// No token: permission denied.
+	req := structs.ServiceSpecificRequest{
+		Datacenter:  "dc1",
+		ServiceName: "db",
+		APIGateway:  true,
+	}
+	require.ErrorContains(t, msgpackrpc.CallWithCodec(codec, "Health.ServiceNodes", &req, &out), "Permission denied")
+	require.Len(t, out.Nodes, 0)
+
+	// Service not covered by the token's policy: permission denied.
+	req = structs.ServiceSpecificRequest{
+		Datacenter:   "dc1",
+		ServiceName:  "another",
+		APIGateway:   true,
+		QueryOptions: structs.QueryOptions{Token: token.SecretID},
+	}
+	require.ErrorContains(t, msgpackrpc.CallWithCodec(codec, "Health.ServiceNodes", &req, &out), "Permission denied")
+	require.Len(t, out.Nodes, 0)
+
+	// Service covered by the token's policy: allowed.
+	retry.Run(t, func(r *retry.R) {
+		req = structs.ServiceSpecificRequest{
+			Datacenter:   "dc1",
+			ServiceName:  "db",
+			APIGateway:   true,
+			QueryOptions: structs.QueryOptions{Token: token.SecretID},
+		}
+		var allowed structs.IndexedCheckServiceNodes
+		require.NoError(r, msgpackrpc.CallWithCodec(codec, "Health.ServiceNodes", &req, &allowed))
+		require.Len(r, allowed.Nodes, 1)
+		require.Equal(r, "foo", allowed.Nodes[0].Node.Node)
+	})
+}
+
 func TestHealth_NodeChecks_FilterACL(t *testing.T) {
 	if testing.Short() {
 		t.Skip("too slow for testing.Short")
@@ -1525,7 +1752,7 @@ func TestHealth_NodeChecks_FilterACL(t *testing.T) {
 		}
 	}
 	require.True(t, found, "bad: %#v", reply.HealthChecks)
-	require.True(t, reply.QueryMeta.ResultsFilteredByACLs, "ResultsFilteredByACLs should be true")
+	require.True(t, reply.ResultsFilteredByACLs, "ResultsFilteredByACLs should be true")
 
 	const bexprMatchingUserTokenPermissions = "ServiceName matches `f.*`"
 	const bexprNotMatchingUserTokenPermissions = "ServiceName matches `b.*`"
@@ -1620,7 +1847,7 @@ func TestHealth_ServiceChecks_FilterACL(t *testing.T) {
 	err = msgpackrpc.CallWithCodec(codec, "Health.ServiceChecks", &opt, &reply)
 	require.NoError(t, err)
 	require.Empty(t, reply.HealthChecks)
-	require.True(t, reply.QueryMeta.ResultsFilteredByACLs, "ResultsFilteredByACLs should be true")
+	require.True(t, reply.ResultsFilteredByACLs, "ResultsFilteredByACLs should be true")
 
 	// Register a service of the same name on the denied node
 	regArg := structs.RegisterRequest{
@@ -1722,7 +1949,7 @@ func TestHealth_ServiceNodes_FilterACL(t *testing.T) {
 	err = msgpackrpc.CallWithCodec(codec, "Health.ServiceNodes", &opt, &reply)
 	require.NoError(t, err)
 	require.Empty(t, reply.Nodes)
-	require.True(t, reply.QueryMeta.ResultsFilteredByACLs, "ResultsFilteredByACLs should be true")
+	require.True(t, reply.ResultsFilteredByACLs, "ResultsFilteredByACLs should be true")
 
 	// Register a service of the same name on the denied node
 	regArg := structs.RegisterRequest{
@@ -1828,7 +2055,7 @@ func TestHealth_ChecksInState_FilterACL(t *testing.T) {
 		}
 	}
 	require.True(t, found, "missing service 'foo': %#v", reply.HealthChecks)
-	require.True(t, reply.QueryMeta.ResultsFilteredByACLs, "ResultsFilteredByACLs should be true")
+	require.True(t, reply.ResultsFilteredByACLs, "ResultsFilteredByACLs should be true")
 
 	const bexprMatchingUserTokenPermissions = "ServiceName matches `f.*`"
 	const bexprNotMatchingUserTokenPermissions = "ServiceName matches `b.*`"

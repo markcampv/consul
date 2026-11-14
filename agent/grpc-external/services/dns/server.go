@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package dns
@@ -6,8 +6,9 @@ package dns
 import (
 	"context"
 	"fmt"
-	agentdns "github.com/hashicorp/consul/agent/dns"
 	"net"
+
+	agentdns "github.com/hashicorp/consul/agent/dns"
 
 	"github.com/hashicorp/go-hclog"
 	"github.com/miekg/dns"

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package consul
@@ -19,7 +19,7 @@ func (op *Operator) AutopilotGetConfiguration(args *structs.DCSpecificRequest, r
 	}
 
 	// This action requires operator read access.
-	authz, err := op.srv.ACLResolver.ResolveToken(args.Token)
+	authz, err := op.srv.ResolveToken(args.Token)
 	if err != nil {
 		return err
 	}
@@ -52,7 +52,7 @@ func (op *Operator) AutopilotSetConfiguration(args *structs.AutopilotSetConfigRe
 	}
 
 	// This action requires operator write access.
-	authz, err := op.srv.ACLResolver.ResolveToken(args.Token)
+	authz, err := op.srv.ResolveToken(args.Token)
 	if err != nil {
 		return err
 	}
@@ -84,7 +84,7 @@ func (op *Operator) ServerHealth(args *structs.DCSpecificRequest, reply *structs
 	}
 
 	// This action requires operator read access.
-	authz, err := op.srv.ACLResolver.ResolveToken(args.Token)
+	authz, err := op.srv.ResolveToken(args.Token)
 	if err != nil {
 		return err
 	}
@@ -148,7 +148,7 @@ func (op *Operator) AutopilotState(args *structs.DCSpecificRequest, reply *autop
 	}
 
 	// This action requires operator read access.
-	authz, err := op.srv.ACLResolver.ResolveToken(args.Token)
+	authz, err := op.srv.ResolveToken(args.Token)
 	if err != nil {
 		return err
 	}

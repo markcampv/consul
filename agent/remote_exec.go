@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package agent
@@ -262,9 +262,9 @@ QUERY:
 	}
 	if len(out.Entries) == 0 {
 		// If the initial read was stale and had no data, retry as a consistent read
-		if get.QueryOptions.AllowStale {
+		if get.AllowStale {
 			a.logger.Debug("trying consistent fetch of remote exec job spec")
-			get.QueryOptions.AllowStale = false
+			get.AllowStale = false
 			goto QUERY
 		} else {
 			a.logger.Debug("remote exec aborted, job spec missing")

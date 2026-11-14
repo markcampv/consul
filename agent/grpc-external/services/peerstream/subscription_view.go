@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package peerstream
@@ -66,8 +66,8 @@ func (e *exportedServiceRequest) NewMaterializer() (submatview.Materializer, err
 			Subject: &pbsubscribe.SubscribeRequest_NamedSubject{
 				NamedSubject: &pbsubscribe.NamedSubject{
 					Key:       e.req.ServiceName,
-					Namespace: e.req.EnterpriseMeta.NamespaceOrEmpty(),
-					Partition: e.req.EnterpriseMeta.PartitionOrEmpty(),
+					Namespace: e.req.NamespaceOrEmpty(),
+					Partition: e.req.PartitionOrEmpty(),
 				},
 			},
 			Token:      e.req.Token,

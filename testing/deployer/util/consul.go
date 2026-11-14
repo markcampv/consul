@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package util
@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -88,7 +89,7 @@ func proxyAPIClient(baseTransport *http.Transport, proxyPort int, containerIP st
 	cfg := api.DefaultConfig()
 	cfg.Transport = baseTransport
 	cfg.Transport.Proxy = http.ProxyURL(proxyURL)
-	cfg.Address = fmt.Sprintf("http://%s:%d", containerIP, containerPort)
+	cfg.Address = net.JoinHostPort(containerIP, strconv.Itoa(containerPort))
 	cfg.Token = token
 	return api.NewClient(cfg)
 }

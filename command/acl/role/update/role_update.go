@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package roleupdate
@@ -98,7 +98,7 @@ func (c *cmd) Run(args []string) int {
 	}
 
 	if c.roleID == "" {
-		c.UI.Error(fmt.Sprintf("Cannot update a role without specifying the -id parameter"))
+		c.UI.Error("Cannot update a role without specifying the -id parameter")
 		return 1
 	}
 

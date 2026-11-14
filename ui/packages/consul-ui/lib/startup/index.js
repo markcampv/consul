@@ -1,10 +1,11 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 /* eslint-env node */
 /*eslint node/no-extraneous-require: "off"*/
+/*eslint node/no-missing-require: "off"*/
 'use strict';
 //
 const $ = process.env;

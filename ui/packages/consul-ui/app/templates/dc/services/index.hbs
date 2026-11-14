@@ -4,7 +4,7 @@
 }}
 
 <Route
-  @name={{routeName}}
+  @name={{this.routeName}}
 as |route|>
 
   <DataLoader @src={{
@@ -14,43 +14,43 @@ as |route|>
         nspace=route.params.nspace
         dc=route.params.dc
       )
-  }} as |api|>
+  }}>
 
-    <BlockSlot @name="error">
+    <:error as |api|>
       <AppError
         @error={{api.error}}
         @login={{route.model.app.login.open}}
       />
-    </BlockSlot>
+    </:error>
 
-    <BlockSlot @name="loaded">
+    <:loaded as |api|>
 
 {{#let
 
   (hash
-    value=(or sortBy "Status:asc")
-    change=(action (mut sortBy) value="target.selected")
+    value=(or this.sortBy "Status:asc")
+    change=(action (mut this.sortBy) value="target.selected")
   )
 
   (hash
     status=(hash
-      value=(if status (split status ',') undefined)
-      change=(action (mut status) value="target.selectedItems")
+      value=(if this.status (split this.status ',') undefined)
+      change=(action (mut this.status) value="target.selectedItems")
     )
     kind=(hash
-      value=(if kind (split kind ',') undefined)
-      change=(action (mut kind) value="target.selectedItems")
+      value=(if this.kind (split this.kind ',') undefined)
+      change=(action (mut this.kind) value="target.selectedItems")
     )
     source=(hash
-      value=(if source (split source ',') undefined)
-      change=(action (mut source) value="target.selectedItems")
+      value=(if this.source (split this.source ',') undefined)
+      change=(action (mut this.source) value="target.selectedItems")
     )
     searchproperty=(hash
-      value=(if (not-eq searchproperty undefined)
-        (split searchproperty ',')
+      value=(if (not-eq this.searchproperty undefined)
+        (split this.searchproperty ',')
         this._searchProperties
       )
-      change=(action (mut searchproperty) value="target.selectedItems")
+      change=(action (mut this.searchproperty) value="target.selectedItems")
       default=this._searchProperties
     )
 
@@ -64,66 +64,57 @@ as |route|>
 as |sort filters items partition nspace|}}
 
   <AppView>
-    <BlockSlot @name="header">
+    <:header>
         <h1>
-          <route.Title @title="Services" /> <em>{{format-number items.length}} total</em>
+          <route.Title @title="Services" />
         </h1>
-        <label for="toolbar-toggle"></label>
-    </BlockSlot>
-    <BlockSlot @name="toolbar">
-{{#if (gt items.length 0) }}
-  {{#let (collection items) as |items|}}
-        <Consul::Service::SearchBar
-          @sources={{get items 'ExternalSources'}}
-          @partitions={{get items 'Partitions'}}
-          @partition={{partition}}
-
-          @search={{search}}
-          @onsearch={{action (mut search) value="target.value"}}
-
-          @sort={{sort}}
-
+    </:header>
+    <:content>
+      {{! Toolbar is rendered outside DataCollection so it persists when
+          filters/search reduce the visible rows to zero. It only appears
+          when there are actual services in the catalog. }}
+      {{#if (gt items.length 0)}}
+        <Consul::Service::Toolbar
+          @sources={{get (collection items) 'ExternalSources'}}
+          @search={{this.search}}
+          @onsearch={{action (mut this.search) value="target.value"}}
           @filter={{filters}}
-
         />
-  {{/let}}
-{{/if}}
-    </BlockSlot>
-    <BlockSlot @name="content">
+      {{/if}}
       <DataCollection
         @type="service"
         @sort={{sort.value}}
         @filters={{filters}}
-        @search={{search}}
+        @search={{this.search}}
         @items={{items}}
       as |collection|>
         <collection.Collection>
-          <Consul::Service::List
+          <Consul::Service::Table
             @items={{collection.items}}
             @partition={{partition}}
             @nspace={{nspace}}
-          >
-          </Consul::Service::List>
+            @card={{true}}
+          />
         </collection.Collection>
         <collection.Empty>
             <EmptyState
               @login={{route.model.app.login.open}}
             >
-              <BlockSlot @name="header">
+              <:header>
                 <h2>
                   {{t 'routes.dc.services.index.empty.header'
                     items=items.length
                   }}
                 </h2>
-              </BlockSlot>
-              <BlockSlot @name="body">
+              </:header>
+              <:body>
                 {{t 'routes.dc.services.index.empty.body'
                   items=items.length
                   canUseACLs=(can "use acls")
                   htmlSafe=true
                 }}
-              </BlockSlot>
-              <BlockSlot @name="actions">
+              </:body>
+              <:actions>
                 <li>
                   <Hds::Link::Standalone
                     @text='Documentation on Services'
@@ -142,16 +133,16 @@ as |sort filters items partition nspace|}}
                     @size='small'
                   />
                 </li>
-              </BlockSlot>
+              </:actions>
             </EmptyState>
           </collection.Empty>
         </DataCollection>
-    </BlockSlot>
+    </:content>
 
   </AppView>
 
 {{/let}}
 
-    </BlockSlot>
+    </:loaded>
   </DataLoader>
 </Route>

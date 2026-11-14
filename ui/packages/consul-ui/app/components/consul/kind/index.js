@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -17,8 +17,16 @@ const normalizedGatewayLabels = {
 
 export default Component.extend({
   tagName: '',
-  Name: computed('item.Kind', function () {
-    const name = normalizedGatewayLabels[this.item.Kind];
-    return name ? name : titleize(humanize(this.item.Kind));
+  Name: computed('item.Kind', '_Name', {
+    get() {
+      if (this._Name !== undefined) {
+        return this._Name;
+      }
+      const name = normalizedGatewayLabels[this.item.Kind];
+      return name ? name : titleize(humanize(this.item.Kind));
+    },
+    set(_key, value) {
+      return this.set('_Name', value);
+    },
   }),
 });

@@ -1,32 +1,30 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
-/*eslint ember/closure-actions: "warn"*/
 import Component from '@ember/component';
+import { action } from '@ember/object';
+import { tracked } from '@glimmer/tracking';
 
-import Slotted from 'block-slots';
-import { set } from '@ember/object';
+export default class ConfirmationDialogComponent extends Component {
+  tagName = '';
+  message = 'Are you sure?';
+  @tracked confirming = false;
+  permanent = false;
 
-export default Component.extend(Slotted, {
-  tagName: '',
-  message: 'Are you sure?',
-  confirming: false,
-  permanent: false,
-  actions: {
-    cancel: function () {
-      set(this, 'confirming', false);
-    },
-    execute: function () {
-      set(this, 'confirming', false);
-      this.sendAction(...['actionName', ...this['arguments']]);
-    },
-    confirm: function () {
-      const [action, ...args] = arguments;
-      set(this, 'actionName', action);
-      set(this, 'arguments', args);
-      set(this, 'confirming', true);
-    },
-  },
-});
+  @action
+  cancel() {
+    this.confirming = false;
+  }
+
+  @action
+  execute() {
+    this.confirming = false;
+  }
+
+  @action
+  confirm() {
+    this.confirming = true;
+  }
+}

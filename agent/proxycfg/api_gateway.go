@@ -1,16 +1,21 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package proxycfg
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/hashicorp/consul/acl"
+	"github.com/hashicorp/consul/agent/featuregate"
 	"github.com/hashicorp/consul/agent/leafcert"
 	"github.com/hashicorp/consul/agent/proxycfg/internal/watch"
 	"github.com/hashicorp/consul/agent/structs"
+	"github.com/hashicorp/consul/lib/stringslice"
 	"github.com/hashicorp/consul/proto/private/pbpeering"
 )
 
@@ -25,6 +30,7 @@ type handlerAPIGateway struct {
 // initialize sets up the initial watches needed based on the api-gateway registration
 func (h *handlerAPIGateway) initialize(ctx context.Context) (ConfigSnapshot, error) {
 	snap := newConfigSnapshotFromServiceInstance(h.serviceInstance, h.stateConfig)
+	snap.APIGateway.ComposeUpstreamRouting = h.composeUpstreamRoutingEnabled()
 
 	// Watch for root changes
 	err := h.dataSources.CARoots.Notify(ctx, &structs.DCSpecificRequest{
@@ -59,7 +65,6 @@ func (h *handlerAPIGateway) initialize(ctx context.Context) (ConfigSnapshot, err
 		return snap, err
 	}
 
-	snap.APIGateway.Listeners = make(map[string]structs.APIGatewayListener)
 	snap.APIGateway.BoundListeners = make(map[string]structs.BoundAPIGatewayListener)
 	snap.APIGateway.HTTPRoutes = watch.NewMap[structs.ResourceReference, *structs.HTTPRouteConfigEntry]()
 	snap.APIGateway.TCPRoutes = watch.NewMap[structs.ResourceReference, *structs.TCPRouteConfigEntry]()
@@ -80,6 +85,14 @@ func (h *handlerAPIGateway) initialize(ctx context.Context) (ConfigSnapshot, err
 	snap.APIGateway.WatchedLocalGWEndpoints = watch.NewMap[string, structs.CheckServiceNodes]()
 	snap.APIGateway.WatchedUpstreams = make(map[UpstreamID]map[string]context.CancelFunc)
 	snap.APIGateway.WatchedUpstreamEndpoints = make(map[UpstreamID]map[string]structs.CheckServiceNodes)
+
+	// Watch discovery chains for any builtin/ext-authz mesh (Service) targets
+	// declared on the gateway's EnvoyExtensions so their mTLS clusters/endpoints
+	// can be generated even though they are referenced only by the ext_authz
+	// filter and never as a route target.
+	if err := h.watchExtAuthzMeshTargets(ctx, &snap); err != nil {
+		return snap, err
+	}
 
 	return snap, nil
 }
@@ -135,6 +148,18 @@ func (h *handlerAPIGateway) handleUpdate(ctx context.Context, u UpdateEvent, sna
 		if err != nil {
 			return err
 		}
+	case featureGateWatchID:
+		enabled := h.composeUpstreamRoutingEnabled()
+		if snap.APIGateway.ComposeUpstreamRouting == enabled {
+			return nil
+		}
+		h.logger.Debug("feature-gate changed: rebuilding API Gateway discovery chain watches",
+			"compose_upstream_routing", enabled,
+		)
+		snap.APIGateway.ComposeUpstreamRouting = enabled
+		if err := h.refreshRouteDiscoveryChainWatches(ctx, snap); err != nil {
+			return err
+		}
 
 	default:
 		if err := (*handlerUpstreams)(h).handleUpdateUpstreams(ctx, u, snap); err != nil {
@@ -143,6 +168,55 @@ func (h *handlerAPIGateway) handleUpdate(ctx context.Context, u UpdateEvent, sna
 	}
 
 	return h.recompileDiscoveryChains(snap)
+}
+
+// refreshRouteDiscoveryChainWatches reissues existing route watches after the
+// effective gate changes. The protocol override is part of the discovery-chain
+// request key, so merely rebuilding a snapshot would leave the old compiled
+// chains in place. HTTP routes are processed first so a service referenced by
+// both HTTP and TCP routes receives the HTTP override when composition is on.
+// Route refreshes are bulkheaded: one broken route is reported but does not
+// prevent independent routes from restoring their watches.
+func (h *handlerAPIGateway) refreshRouteDiscoveryChainWatches(ctx context.Context, snap *ConfigSnapshot) error {
+	for upstreamID, cancel := range snap.APIGateway.WatchedDiscoveryChains {
+		cancel()
+		delete(snap.APIGateway.WatchedDiscoveryChains, upstreamID)
+	}
+
+	var errs []error
+	refresh := func(entry structs.ConfigEntry) {
+		if err := h.handleRouteConfigUpdate(ctx, UpdateEvent{
+			CorrelationID: routeConfigWatchID,
+			Result:        &structs.ConfigEntryResponse{Entry: entry},
+		}, snap); err != nil {
+			errs = append(errs, fmt.Errorf("failed to refresh %s route %q: %w", entry.GetKind(), entry.GetName(), err))
+		}
+	}
+	snap.APIGateway.HTTPRoutes.ForEachKey(func(ref structs.ResourceReference) bool {
+		route, ok := snap.APIGateway.HTTPRoutes.Get(ref)
+		if !ok || route == nil {
+			return true
+		}
+		refresh(route)
+		return true
+	})
+	snap.APIGateway.TCPRoutes.ForEachKey(func(ref structs.ResourceReference) bool {
+		route, ok := snap.APIGateway.TCPRoutes.Get(ref)
+		if !ok || route == nil {
+			return true
+		}
+		refresh(route)
+		return true
+	})
+	return errors.Join(errs...)
+}
+
+func (h *handlerAPIGateway) composeUpstreamRoutingEnabled() bool {
+	// Agentful gateways always compose upstream routing; the gate only applies to agentless ones.
+	if !h.agentless {
+		return true
+	}
+	return h.featureGate != nil && h.featureGate.Enabled(featuregate.APIGatewayUpstreamRouting)
 }
 
 // handleRootCAUpdate responds to changes in the watched root CA for a gateway
@@ -184,6 +258,22 @@ func (h *handlerAPIGateway) handleGatewayConfigUpdate(ctx context.Context, u Upd
 
 		seenRefs := make(map[structs.ResourceReference]any)
 		for _, listener := range gwConf.Listeners {
+			// The controller copies Port/Protocol/Hostname from the APIGatewayListener
+			// into BoundAPIGatewayListener at reconcile time. If this BoundAPIGateway
+			// snapshot arrived before the controller has run (Port==0), and we already
+			// have the APIGatewayConfigEntry, heal the missing fields from it so that
+			// xDS generation is not blocked on a second reconcile cycle.
+			if listener.Port == 0 && snap.APIGateway.GatewayConfig != nil {
+				for _, gwListener := range snap.APIGateway.GatewayConfig.Listeners {
+					if gwListener.Name == listener.Name {
+						listener.Port = gwListener.Port
+						listener.Protocol = gwListener.Protocol
+						listener.Hostname = gwListener.Hostname
+						listener.TLS = gwListener.TLS
+						break
+					}
+				}
+			}
 			snap.APIGateway.BoundListeners[listener.Name] = listener
 
 			// Subscribe to changes in each attached x-route config entry
@@ -193,9 +283,9 @@ func (h *handlerAPIGateway) handleGatewayConfigUpdate(ctx context.Context, u Upd
 				ctx, cancel := context.WithCancel(ctx)
 				switch ref.Kind {
 				case structs.HTTPRoute:
-					snap.APIGateway.HTTPRoutes.InitWatch(ref, cancel)
+					snap.APIGateway.HTTPRoutes.UpdateWatch(ref, cancel)
 				case structs.TCPRoute:
-					snap.APIGateway.TCPRoutes.InitWatch(ref, cancel)
+					snap.APIGateway.TCPRoutes.UpdateWatch(ref, cancel)
 				default:
 					cancel()
 					return fmt.Errorf("unexpected route kind on gateway: %s", ref.Kind)
@@ -214,14 +304,21 @@ func (h *handlerAPIGateway) handleGatewayConfigUpdate(ctx context.Context, u Upd
 				seenRefs[ref] = struct{}{}
 
 				if ref.Kind == structs.FileSystemCertificate {
-					snap.APIGateway.FileSystemCertificates.InitWatch(ref, cancel)
+					// Use UpdateWatch (not InitWatch) so that a previously
+					// fetched certificate value is preserved when the gateway
+					// reconciles again. InitWatch wipes the stored value on every
+					// call, which—when multiple certificates are attached—leaves
+					// the snapshot without any certs and collapses all custom SNI
+					// filter chains down to the Connect leaf catch-all. This is
+					// the certificate analogue of the route fix in #23562.
+					snap.APIGateway.FileSystemCertificates.UpdateWatch(ref, cancel)
 
 					err := h.subscribeToConfigEntry(ctx, ref.Kind, ref.Name, ref.EnterpriseMeta, fileSystemCertificateConfigWatchID)
 					if err != nil {
 						return err
 					}
 				} else {
-					snap.APIGateway.InlineCertificates.InitWatch(ref, cancel)
+					snap.APIGateway.InlineCertificates.UpdateWatch(ref, cancel)
 
 					err := h.subscribeToConfigEntry(ctx, ref.Kind, ref.Name, ref.EnterpriseMeta, inlineCertificateConfigWatchID)
 					if err != nil {
@@ -265,27 +362,23 @@ func (h *handlerAPIGateway) handleGatewayConfigUpdate(ctx context.Context, u Upd
 		})
 
 		snap.APIGateway.BoundGatewayConfigLoaded = true
-		break
+
+		// BoundListeners and route hostnames just changed — re-evaluate the
+		// leaf cert SANs. The SAN-equality guard inside watchIngressLeafCert
+		// makes this a no-op when nothing actually changed.
+		return h.watchIngressLeafCert(ctx, snap)
+
 	case *structs.APIGatewayConfigEntry:
 		snap.APIGateway.GatewayConfig = gwConf
-
-		for _, listener := range gwConf.Listeners {
-			snap.APIGateway.Listeners[listener.Name] = listener
-		}
-
+		snap.APIGateway.TLSConfig = gwConf.TLS
 		snap.APIGateway.GatewayConfigLoaded = true
 
 		// Watch the corresponding bound-api-gateway config entry
-		err := h.subscribeToConfigEntry(ctx, structs.BoundAPIGateway, h.service, h.proxyID.EnterpriseMeta, boundGatewayConfigWatchID)
-		if err != nil {
-			return err
-		}
-		break
+		return h.subscribeToConfigEntry(ctx, structs.BoundAPIGateway, h.service, h.proxyID.EnterpriseMeta, boundGatewayConfigWatchID)
+
 	default:
 		return fmt.Errorf("invalid type for config entry: %T", resp.Entry)
 	}
-
-	return h.watchIngressLeafCert(ctx, snap)
 }
 
 func (h *handlerAPIGateway) handleFileSystemCertConfigUpdate(_ context.Context, u UpdateEvent, snap *ConfigSnapshot) error {
@@ -354,7 +447,12 @@ func (h *handlerAPIGateway) handleRouteConfigUpdate(ctx context.Context, u Updat
 	}
 
 	seenUpstreamIDs := make(upstreamIDSet)
-	upstreams := make(map[APIGatewayListenerKey]structs.Upstreams)
+	upstreamsSet := make(map[APIGatewayListenerKey]structs.Upstreams)
+
+	var defaultLimits *structs.UpstreamLimits
+	if snap != nil && snap.APIGateway.GatewayConfig != nil {
+		defaultLimits = snap.APIGateway.GatewayConfig.Defaults
+	}
 
 	switch route := resp.Entry.(type) {
 	case *structs.HTTPRouteConfigEntry:
@@ -362,10 +460,32 @@ func (h *handlerAPIGateway) handleRouteConfigUpdate(ctx context.Context, u Updat
 
 		for _, rule := range route.Rules {
 			for _, service := range rule.Services {
-				for _, listener := range snap.APIGateway.Listeners {
+				effectiveLimits := apiGatewayEffectiveUpstreamLimits(defaultLimits, service.Limits)
+
+				// Retrieving the meshGatewayConfig from handlerAPIGateway instance.
+				// `handlerAPIGateway` embeds `handlerState`, which exposes `serviceInstance.proxyCfg`.
+				// serviceInstance.proxyCfg.MeshGateway is replicated from NodeService during state setup/update.
+				// and NodeService populated for all gateway's during service resistration `AgentRegisterService`.
+				//
+				// So, Whenever any change happens in NodeService, proxyCfg manager will recreate
+				// the state where it copies NodeService to serviceInstance and
+				// then calls this api_gateway handleUpdates method.
+				// which will update the Mesh-Gateway config to api_gateway upstreams (below).
+				// h.service = <name of api-gateway>
+				meshGatewayConfig := h.proxyCfg.MeshGateway
+
+				// chainProtocol is the protocol used to compile the discovery chain
+				// for this service. It is derived from the HTTP-like listener(s) the
+				// route binds to so that http2/grpc listeners keep the gateway ->
+				// service hop on HTTP/2 end-to-end (instead of downgrading to
+				// HTTP/1.1) and so the chain protocol matches the synthesized chain
+				// used for route generation (avoiding a cluster-name mismatch).
+				chainProtocol := string(structs.ListenerProtocolHTTP)
+
+				for _, listener := range snap.APIGateway.BoundListeners {
 					shouldBind := false
 					for _, parent := range route.Parents {
-						if h.referenceIsForListener(parent, listener, snap) {
+						if h.referenceIsForBoundListener(parent, listener, snap) {
 							shouldBind = true
 							break
 						}
@@ -374,6 +494,22 @@ func (h *handlerAPIGateway) handleRouteConfigUpdate(ctx context.Context, u Updat
 						continue
 					}
 
+					// Use the listener's protocol (http, http2, or grpc) for the
+					// upstream so the gateway -> service hop matches the listener.
+					listenerProtocol := string(listener.Protocol)
+					if !structs.IsProtocolHTTPLike(listenerProtocol) {
+						listenerProtocol = string(structs.ListenerProtocolHTTP)
+					}
+					if listenerProtocol != string(structs.ListenerProtocolHTTP) || chainProtocol == string(structs.ListenerProtocolHTTP) {
+						chainProtocol = listenerProtocol
+					}
+
+					upstreamCfg := map[string]interface{}{}
+					structs.UpstreamConfig{
+						Protocol: listenerProtocol,
+						Limits:   effectiveLimits,
+					}.MergeInto(upstreamCfg)
+
 					upstream := structs.Upstream{
 						DestinationName:      service.Name,
 						DestinationNamespace: service.NamespaceOrDefault(),
@@ -381,13 +517,16 @@ func (h *handlerAPIGateway) handleRouteConfigUpdate(ctx context.Context, u Updat
 						LocalBindPort:        listener.Port,
 						// Pass the protocol that was configured on the listener in order
 						// to force that protocol on the Envoy listener.
-						Config: map[string]interface{}{
-							"protocol": "http",
-						},
+						Config: upstreamCfg,
+
+						// Propogate the meshGatewayConfig in api gateway upstreams
+						// so that meshGatewayMode can be used in XDS for
+						// endpoints and cluster config generation.
+						MeshGateway: meshGatewayConfig,
 					}
 
-					listenerKey := APIGatewayListenerKeyFromListener(listener)
-					upstreams[listenerKey] = append(upstreams[listenerKey], upstream)
+					listenerKey := APIGatewayListenerKeyFromBoundListener(listener)
+					upstreamsSet[listenerKey] = append(upstreamsSet[listenerKey], upstream)
 				}
 
 				upstreamID := NewUpstreamIDFromServiceName(service.ServiceName())
@@ -398,8 +537,13 @@ func (h *handlerAPIGateway) handleRouteConfigUpdate(ctx context.Context, u Updat
 					name:       service.Name,
 					namespace:  service.NamespaceOrDefault(),
 					partition:  service.PartitionOrDefault(),
-					datacenter: h.stateConfig.source.Datacenter,
+					datacenter: h.source.Datacenter,
 				}
+				// Ensure discovery chain compilation is HTTP-like for HTTPRoutes so service
+				// routers/splitters are included when present. For http2/grpc listeners
+				// this keeps the upstream hop on HTTP/2 end-to-end. The feature gate is
+				// applied separately when the gateway discovery chain is synthesized.
+				watchOpts.cfg.Protocol = chainProtocol
 
 				handler := &handlerUpstreams{handlerState: h.handlerState}
 				if err := handler.watchDiscoveryChain(ctx, snap, watchOpts); err != nil {
@@ -412,14 +556,16 @@ func (h *handlerAPIGateway) handleRouteConfigUpdate(ctx context.Context, u Updat
 		snap.APIGateway.TCPRoutes.Set(ref, route)
 
 		for _, service := range route.Services {
+			effectiveLimits := apiGatewayEffectiveUpstreamLimits(defaultLimits, service.Limits)
+			meshGatewayConfig := h.proxyCfg.MeshGateway
 			upstreamID := NewUpstreamIDFromServiceName(service.ServiceName())
 			seenUpstreamIDs.add(upstreamID)
 
 			// For each listener, check if this route should bind and, if so, create an upstream.
-			for _, listener := range snap.APIGateway.Listeners {
+			for _, listener := range snap.APIGateway.BoundListeners {
 				shouldBind := false
 				for _, parent := range route.Parents {
-					if h.referenceIsForListener(parent, listener, snap) {
+					if h.referenceIsForBoundListener(parent, listener, snap) {
 						shouldBind = true
 						break
 					}
@@ -428,6 +574,12 @@ func (h *handlerAPIGateway) handleRouteConfigUpdate(ctx context.Context, u Updat
 					continue
 				}
 
+				upstreamCfg := map[string]interface{}{}
+				structs.UpstreamConfig{
+					Protocol: "tcp",
+					Limits:   effectiveLimits,
+				}.MergeInto(upstreamCfg)
+
 				upstream := structs.Upstream{
 					DestinationName:      service.Name,
 					DestinationNamespace: service.NamespaceOrDefault(),
@@ -435,13 +587,12 @@ func (h *handlerAPIGateway) handleRouteConfigUpdate(ctx context.Context, u Updat
 					LocalBindPort:        listener.Port,
 					// Pass the protocol that was configured on the ingress listener in order
 					// to force that protocol on the Envoy listener.
-					Config: map[string]interface{}{
-						"protocol": "tcp",
-					},
+					Config:      upstreamCfg,
+					MeshGateway: meshGatewayConfig,
 				}
 
-				listenerKey := APIGatewayListenerKeyFromListener(listener)
-				upstreams[listenerKey] = append(upstreams[listenerKey], upstream)
+				listenerKey := APIGatewayListenerKeyFromBoundListener(listener)
+				upstreamsSet[listenerKey] = append(upstreamsSet[listenerKey], upstream)
 			}
 
 			watchOpts := discoveryChainWatchOpts{
@@ -449,7 +600,11 @@ func (h *handlerAPIGateway) handleRouteConfigUpdate(ctx context.Context, u Updat
 				name:       service.Name,
 				namespace:  service.NamespaceOrDefault(),
 				partition:  service.PartitionOrDefault(),
-				datacenter: h.stateConfig.source.Datacenter,
+				datacenter: h.source.Datacenter,
+			}
+			// Ensure discovery chain compilation matches the route protocol.
+			if snap.APIGateway.ComposeUpstreamRouting {
+				watchOpts.cfg.Protocol = string(route.GetProtocol())
 			}
 
 			handler := &handlerUpstreams{handlerState: h.handlerState}
@@ -461,8 +616,8 @@ func (h *handlerAPIGateway) handleRouteConfigUpdate(ctx context.Context, u Updat
 		return fmt.Errorf("invalid type for config entry: %T", resp.Entry)
 	}
 
-	for listener, set := range upstreams {
-		snap.APIGateway.Upstreams.set(ref, listener, set)
+	for listenerKey, set := range upstreamsSet {
+		snap.APIGateway.Upstreams.set(ref, listenerKey, set)
 	}
 	snap.APIGateway.UpstreamsSet.set(ref, seenUpstreamIDs)
 
@@ -483,24 +638,89 @@ func (h *handlerAPIGateway) handleRouteConfigUpdate(ctx context.Context, u Updat
 	}
 	reconcilePeeringWatches(snap.APIGateway.DiscoveryChain, snap.APIGateway.UpstreamConfig, snap.APIGateway.PeeredUpstreams, snap.APIGateway.PeerUpstreamEndpoints, snap.APIGateway.UpstreamPeerTrustBundles)
 
+	// Route hostnames contribute DNS SANs to the gateway's leaf certificate, but
+	// routes are loaded after the gateway config has settled (the leaf watch is
+	// first established from handleGatewayConfigUpdate before routes arrive).
+	// Re-evaluate the leaf cert watch here so newly-seen route hostnames are
+	// reflected in the issued certificate.
+	//
+	// NOTE: This calls watchIngressLeafCert (an ingress-named helper) intentionally.
+	// Ingress Gateway is deprecated and API Gateway is its strategic replacement;
+	// both require the same leaf-cert DNS SAN behaviour for DNS auto-registration
+	// parity. The helper is shared to avoid duplicating the watch-guard logic.
+	// watchIngressLeafCert is a no-op when the computed SAN set is unchanged.
+	if err := h.watchIngressLeafCert(ctx, snap); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func apiGatewayEffectiveUpstreamLimits(defaults, service *structs.UpstreamLimits) *structs.UpstreamLimits {
+	if defaults == nil && service == nil {
+		return nil
+	}
+
+	effective := &structs.UpstreamLimits{}
+	if defaults != nil {
+		effective = defaults.Clone()
+	}
+	if effective == nil {
+		effective = &structs.UpstreamLimits{}
+	}
+
+	if service != nil {
+		if service.MaxConnections != nil {
+			effective.MaxConnections = intPointer(*service.MaxConnections)
+		}
+		if service.MaxPendingRequests != nil {
+			effective.MaxPendingRequests = intPointer(*service.MaxPendingRequests)
+		}
+		if service.MaxConcurrentRequests != nil {
+			effective.MaxConcurrentRequests = intPointer(*service.MaxConcurrentRequests)
+		}
+		if service.PassiveHealthCheck != nil {
+			effective.PassiveHealthCheck = service.PassiveHealthCheck.Clone()
+		}
+	}
+
+	if effective.IsZero() {
+		return nil
+	}
+
+	return effective
+}
+
+func intPointer(v int) *int {
+	return &v
 }
 
 func (h *handlerAPIGateway) recompileDiscoveryChains(snap *ConfigSnapshot) error {
 	synthesizedChains := map[UpstreamID]*structs.CompiledDiscoveryChain{}
 
-	for name, listener := range snap.APIGateway.Listeners {
-		boundListener, ok := snap.APIGateway.BoundListeners[name]
-		if !(ok && snap.APIGateway.GatewayConfig.ListenerIsReady(name)) {
-			// Skip any listeners that don't have a bound listener. Once the bound listener is created, this will be run again.
-			// skip any listeners that might be in an invalid state
+	for name, boundListener := range snap.APIGateway.BoundListeners {
+		// Skip incomplete listeners (Port==0 or Protocol=="") that haven't been
+		// reconciled by the controller yet — same guard as getReadyListeners.
+		if boundListener.Port == 0 || boundListener.Protocol == "" {
+			continue
+		}
+		if !snap.APIGateway.GatewayConfig.ListenerIsReady(name) {
+			// Skip any listeners that might be in an invalid state.
 			continue
 		}
 
 		// Create a synthesized discovery chain for each service.
-		services, upstreams, compiled, err := snap.APIGateway.synthesizeChains(h.source.Datacenter, listener, boundListener)
+		services, upstreams, compiled, skipped, err := snap.APIGateway.synthesizeChains(h.source.Datacenter, boundListener)
 		if err != nil {
 			return err
+		}
+		// An unrecognized route kind for a single routeRef must not abort
+		// synthesis for the rest of this listener (or discard chains already
+		// synthesized for other listeners in this same recompile pass). Skip
+		// it and record the error for the caller to log as a warning, same as
+		// the per-route Compile failures handled in Synthesize()..
+		for _, routeErr := range skipped {
+			h.logger.Warn("skipping misconfigured HTTPRoute during discovery chain synthesis", "listener", name, "error", routeErr)
 		}
 
 		if len(upstreams) == 0 {
@@ -526,14 +746,12 @@ func (h *handlerAPIGateway) recompileDiscoveryChains(snap *ConfigSnapshot) error
 	return nil
 }
 
-// referenceIsForListener returns whether the provided structs.ResourceReference
-// targets the provided structs.APIGatewayListener. For this to be true, the kind
+// referenceIsForBoundListener returns whether the provided structs.ResourceReference
+// targets the provided structs.BoundAPIGatewayListener. For this to be true, the kind
 // and name must match the structs.APIGatewayConfigEntry containing the listener,
 // and the reference must specify either no section name or the name of the listener
 // as the section name.
-//
-// TODO This would probably be more generally useful as a helper in the structs pkg
-func (h *handlerAPIGateway) referenceIsForListener(ref structs.ResourceReference, listener structs.APIGatewayListener, snap *ConfigSnapshot) bool {
+func (h *handlerAPIGateway) referenceIsForBoundListener(ref structs.ResourceReference, listener structs.BoundAPIGatewayListener, snap *ConfigSnapshot) bool {
 	if ref.Kind != structs.APIGateway && ref.Kind != "" {
 		return false
 	}
@@ -550,6 +768,16 @@ func (h *handlerAPIGateway) watchIngressLeafCert(ctx context.Context, snap *Conf
 		return nil
 	}
 
+	// Compute the desired DNS SANs for the leaf cert. If a watch is already
+	// established with an identical (sorted) SAN set, there's nothing to do —
+	// re-establishing it would needlessly churn the certificate. This guard makes
+	// it safe to call watchIngressLeafCert from both bound-gateway-config and
+	// route updates without issuing redundant cert requests.
+	dnsSANs := h.generateAPIGatewayDNSSANs(snap)
+	if snap.APIGateway.LeafCertWatchCancel != nil && stringslice.Equal(snap.APIGateway.LeafCertDNSSANs, dnsSANs) {
+		return nil
+	}
+
 	// Watch the leaf cert
 	if snap.APIGateway.LeafCertWatchCancel != nil {
 		snap.APIGateway.LeafCertWatchCancel()
@@ -559,6 +787,7 @@ func (h *handlerAPIGateway) watchIngressLeafCert(ctx context.Context, snap *Conf
 		Datacenter:     h.source.Datacenter,
 		Token:          h.token,
 		Service:        h.service,
+		DNSSAN:         dnsSANs,
 		EnterpriseMeta: h.proxyID.EnterpriseMeta,
 	}, leafWatchID, h.ch)
 	if err != nil {
@@ -566,6 +795,164 @@ func (h *handlerAPIGateway) watchIngressLeafCert(ctx context.Context, snap *Conf
 		return err
 	}
 	snap.APIGateway.LeafCertWatchCancel = cancel
+	snap.APIGateway.LeafCertDNSSANs = dnsSANs
 
 	return nil
+}
+
+// apiGatewayTLSServingEnabled returns true if downstream TLS termination is
+// active on the API gateway — either globally via the gateway-level TLS flag
+// (APIGatewayConfigEntry.TLS.Enabled) or on at least one bound listener (a
+// listener carries certificates or an SDS source).
+//
+// This mirrors connectTLSServingEnabled used by ingress gateways. DNS SANs are
+// only needed when the gateway actually terminates TLS for downstream clients.
+//
+// Note: the leaf cert itself is always requested (see watchIngressLeafCert)
+// because the gateway needs it as a client cert for outbound mTLS even when no
+// listener terminates downstream TLS. Only the DNS SAN set is gated here.
+func apiGatewayTLSServingEnabled(snap *ConfigSnapshot) bool {
+	// Gateway-level global TLS flag (APIGatewayConfigEntry.TLS.Enabled).
+	if snap.APIGateway.TLSConfig.Enabled {
+		return true
+	}
+
+	// Check gateway-level TLS configuration. This mirrors the xDS builder logic
+	// (listeners_apigateway.go:644-649) which considers the config non-empty if:
+	// - SDS is configured with a CertResource
+	// - TLSMinVersion is set
+	// - TLSMaxVersion is set
+	// - CipherSuites is configured
+	gatewayTLSCfg := &snap.APIGateway.TLSConfig
+
+	// Check gateway-level SDS (must have CertResource to be valid)
+	if gatewayTLSCfg.SDS != nil && gatewayTLSCfg.SDS.CertResource != "" {
+		return true
+	}
+
+	// Check gateway-level TLS parameters
+	if len(gatewayTLSCfg.TLSMinVersion) > 0 || len(gatewayTLSCfg.TLSMaxVersion) > 0 || len(gatewayTLSCfg.CipherSuites) > 0 {
+		return true
+	}
+
+	// Check if any listener-level listener has TLS termination configured.
+	// This mirrors the xDS builder logic (listeners_apigateway.go:590-591).
+	for _, listener := range snap.APIGateway.BoundListeners {
+		tlsCfg := &listener.TLS
+		if len(tlsCfg.Certificates) > 0 {
+			return true
+		}
+		// Listener-level SDS must also have CertResource to be valid (mirrors hasSDSCert)
+		if tlsCfg.SDS != nil && tlsCfg.SDS.CertResource != "" {
+			return true
+		}
+		if len(tlsCfg.MinVersion) > 0 || len(tlsCfg.MaxVersion) > 0 || len(tlsCfg.CipherSuites) > 0 {
+			return true
+		}
+	}
+
+	return false
+}
+
+// generateAPIGatewayDNSSANs returns the set of DNS Subject Alternative Names that
+// should be present on the API gateway's leaf certificate. This mirrors the
+// ingress gateway behavior (generateIngressDNSSANs) so that services exposed via
+// an API gateway can be reached over TLS using the auto-registered
+// "<service>.api-gateway.<domain>" DNS names, in addition to any explicit
+// hostnames configured on listeners or bound routes.
+//
+// DNS SANs are only injected when at least one listener terminates downstream
+// TLS. When all listeners are plain-text the leaf cert is still issued (for
+// outbound mTLS) but carries no DNS SANs, which avoids unnecessary XFCC
+// header fields on the outbound client certificate.
+func (h *handlerAPIGateway) generateAPIGatewayDNSSANs(snap *ConfigSnapshot) []string {
+	// Only inject DNS SANs when at least one listener terminates downstream TLS.
+	// This mirrors the connectTLSServingEnabled guard in generateIngressDNSSANs.
+	if !apiGatewayTLSServingEnabled(snap) {
+		return nil
+	}
+
+	var dnsNames []string
+
+	// Collect the tenancy (namespace + partition) of every fronted upstream so
+	// the leaf cert carries a wildcard SAN scoped to each tenancy. This mirrors
+	// the tagged-subdomain grammar Consul uses for DNS resolution. In Community
+	// Edition the partition is always the default and is omitted, so the emitted
+	// SANs are byte-identical to the pre-partition behavior; on Enterprise a
+	// non-default partition contributes the partition-scoped wildcard the RFC
+	// requires (e.g. "*.api-gateway.<namespace>.<partition>.<domain>").
+	type tenancy struct {
+		namespace string
+		partition string
+	}
+	tenancies := make(map[tenancy]struct{})
+	for _, upstreams := range snap.APIGateway.Upstreams.toUpstreams() {
+		for _, u := range upstreams {
+			tenancies[tenancy{namespace: u.DestinationNamespace, partition: u.DestinationPartition}] = struct{}{}
+		}
+	}
+	// Ensure the default-tenancy wildcard SAN is always present, even before any
+	// routes have bound, so the common case works without re-issuing the cert.
+	if len(tenancies) == 0 {
+		tenancies[tenancy{
+			namespace: structs.IntentionDefaultNamespace,
+			partition: acl.DefaultPartitionName,
+		}] = struct{}{}
+	}
+
+	// The configured DNS domain may be stored in FQDN form with a trailing dot
+	// (e.g. "consul."). A trailing dot in a certificate DNS SAN is rejected by
+	// strict TLS verifiers (e.g. macOS Secure Transport: "unsupported or invalid
+	// name syntax"), so trim it to emit valid wildcard SANs like
+	// "*.api-gateway.consul".
+	domain := strings.TrimSuffix(h.dnsConfig.Domain, ".")
+	altDomain := strings.TrimSuffix(h.dnsConfig.AltDomain, ".")
+
+	for t := range tenancies {
+		// Build the tenancy label prefix "<namespace>.<partition>." following
+		// Consul's tagged-subdomain grammar (partition is the broader scope, so
+		// it sits closer to the domain). The default namespace and default
+		// partition are special cased in DNS resolution, so omit them here to
+		// keep the wildcard SANs identical to the pre-partition behavior.
+		prefix := ""
+		if t.partition != "" && !acl.IsDefaultPartition(t.partition) {
+			prefix = t.partition + "."
+		}
+		if t.namespace != "" && t.namespace != structs.IntentionDefaultNamespace {
+			prefix = t.namespace + "." + prefix
+		}
+
+		dnsNames = append(dnsNames, fmt.Sprintf("*.api-gateway.%s%s", prefix, domain))
+		dnsNames = append(dnsNames, fmt.Sprintf("*.api-gateway.%s%s.%s", prefix, h.source.Datacenter, domain))
+		if altDomain != "" {
+			dnsNames = append(dnsNames, fmt.Sprintf("*.api-gateway.%s%s", prefix, altDomain))
+			dnsNames = append(dnsNames, fmt.Sprintf("*.api-gateway.%s%s.%s", prefix, h.source.Datacenter, altDomain))
+		}
+	}
+
+	// Add explicit hostnames declared on bound listeners and bound HTTP routes.
+	hostSet := make(map[string]struct{})
+	for _, listener := range snap.APIGateway.BoundListeners {
+		if listener.Hostname != "" {
+			hostSet[listener.Hostname] = struct{}{}
+		}
+	}
+	snap.APIGateway.HTTPRoutes.ForEachKey(func(ref structs.ResourceReference) bool {
+		route, ok := snap.APIGateway.HTTPRoutes.Get(ref)
+		if ok && route != nil {
+			for _, hostname := range route.Hostnames {
+				hostSet[hostname] = struct{}{}
+			}
+		}
+		return true
+	})
+	for host := range hostSet {
+		dnsNames = append(dnsNames, host)
+	}
+
+	// Sort for deterministic output so the leaf-cert request hashes stably and
+	// the watch-change guard in watchIngressLeafCert can compare SAN sets.
+	sort.Strings(dnsNames)
+
+	return dnsNames
 }

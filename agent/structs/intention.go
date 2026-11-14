@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package structs
@@ -669,7 +669,7 @@ func (q *IntentionQueryRequest) CacheInfo() cache.RequestInfo {
 		Check:       q.Check,
 		Match:       q.Match,
 		Exact:       q.Exact,
-		Filter:      q.QueryOptions.Filter,
+		Filter:      q.Filter,
 	}, nil)
 	if err == nil {
 		// If there is an error, we don't set the key. A blank key forces

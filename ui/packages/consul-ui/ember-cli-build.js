@@ -1,9 +1,8 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
-/*eslint ember/no-jquery: "off", ember/no-global-jquery: "off"*/
 'use strict';
 const path = require('path');
 const exists = require('fs').existsSync;
@@ -29,25 +28,20 @@ module.exports = function (defaults, $ = process.env) {
 
   const trees = {};
   const addons = {};
-  const outputPaths = {};
   let excludeFiles = [];
 
-  const apps = [
-    'consul-ui',
-    'consul-acls',
-    'consul-lock-sessions',
-    'consul-peerings',
-    'consul-partitions',
-    'consul-nspaces',
-  ].map((item) => {
+  const apps = ['consul-ui'].map((item) => {
     return {
       name: item,
-      path: path.dirname(require.resolve(`${item}/package.json`)),
+      path: path.resolve(__dirname, '..', item),
     };
   });
 
   const babel = {
-    plugins: ['@babel/plugin-proposal-object-rest-spread'],
+    plugins: [
+      ['@babel/plugin-proposal-decorators', { legacy: true }],
+      ['@babel/plugin-transform-class-properties', { loose: true }],
+    ],
     sourceMaps: sourcemaps ? 'inline' : false,
   };
 
@@ -95,6 +89,7 @@ module.exports = function (defaults, $ = process.env) {
     addons.blacklist = [
       // exclude docfy
       '@docfy/ember',
+      '@docfy/ember-cli',
     ];
   }
 
@@ -154,35 +149,21 @@ module.exports = function (defaults, $ = process.env) {
       productionEnvironments: prodlike,
     }),
     {
+      '@embroider/macros': {
+        setConfig: {
+          '@ember-data/store': {
+            polyfillUUID: true,
+          },
+        },
+      },
       trees: trees,
       addons: addons,
-      outputPaths: outputPaths,
-      'ember-cli-babel': {
-        includePolyfill: true,
+      fingerprint: {
+        // referenced by name from the extensionless oidc/callback page
+        exclude: ['oidc/callback.js'],
       },
-      postcssOptions: {
-        compile: {
-          extension: 'scss',
-          plugins: [
-            {
-              module: require('@csstools/postcss-sass'),
-              options: {
-                includePaths: [
-                  '../../node_modules/@hashicorp/design-system-tokens/dist/products/css',
-                ],
-              },
-            },
-            {
-              module: require('tailwindcss'),
-              options: {
-                config: './tailwind.config.js',
-              },
-            },
-            {
-              module: require('autoprefixer'),
-            },
-          ],
-        },
+      'ember-cli-babel': {
+        includePolyfill: false,
       },
       'ember-cli-string-helpers': {
         only: [
@@ -204,13 +185,16 @@ module.exports = function (defaults, $ = process.env) {
         forbidEval: true,
         publicAssetURL: isProd ? '{{.ContentPath}}assets' : undefined,
       },
-      codemirror: {
-        keyMaps: ['sublime'],
-        addonFiles: ['lint/lint.css', 'lint/yaml-lint.js', 'mode/loadmode.js'],
-      },
       sassOptions: {
         implementation: require('sass'),
         sourceMapEmbed: sourcemaps,
+        precision: 4,
+        includePaths: [
+          './node_modules/@hashicorp/design-system-tokens/dist/products/css',
+          './node_modules/@hashicorp/design-system-components/dist/styles',
+          './node_modules/ember-basic-dropdown/vendor',
+          './node_modules/ember-power-select/vendor',
+        ],
       },
     }
   );
@@ -264,27 +248,6 @@ module.exports = function (defaults, $ = process.env) {
   // CSS.escape polyfill
   app.import('node_modules/css.escape/css.escape.js', { outputFile: 'assets/css.escape.js' });
 
-  // Possibly dynamically loaded via CodeMirror linting. See components/code-editor.js
-  app.import('node_modules/codemirror/mode/javascript/javascript.js', {
-    outputFile: 'assets/codemirror/mode/javascript/javascript.js',
-  });
-
-  // HCL/Ruby linting support. Possibly dynamically loaded via CodeMirror linting. See components/code-editor.js
-  app.import('node_modules/codemirror/mode/ruby/ruby.js', {
-    outputFile: 'assets/codemirror/mode/ruby/ruby.js',
-  });
-
-  // YAML linting support. Possibly dynamically loaded via CodeMirror linting. See components/code-editor.js
-  app.import('node_modules/js-yaml/dist/js-yaml.js', {
-    outputFile: 'assets/codemirror/mode/yaml/yaml.js',
-  });
-  app.import('node_modules/codemirror/mode/yaml/yaml.js', {
-    outputFile: 'assets/codemirror/mode/yaml/yaml.js',
-  });
-  // XML linting support. Possibly dynamically loaded via CodeMirror linting. See services/code-mirror/linter.js
-  app.import('node_modules/codemirror/mode/xml/xml.js', {
-    outputFile: 'assets/codemirror/mode/xml/xml.js',
-  });
   // metrics-providers
   app.import('vendor/metrics-providers/consul.js', {
     outputFile: 'assets/metrics-providers/consul.js',

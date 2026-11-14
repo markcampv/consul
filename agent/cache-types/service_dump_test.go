@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package cachetype
@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"context"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
@@ -24,27 +25,29 @@ func TestInternalServiceDump(t *testing.T) {
 	rpc.On("RPC", mock.Anything, "Internal.ServiceDump", mock.Anything, mock.Anything).Return(nil).
 		Run(func(args mock.Arguments) {
 			req := args.Get(2).(*structs.ServiceDumpRequest)
-			require.Equal(t, uint64(24), req.QueryOptions.MinQueryIndex)
-			require.Equal(t, 1*time.Second, req.QueryOptions.MaxQueryTime)
+			require.Equal(t, uint64(24), req.MinQueryIndex)
+			require.Equal(t, 1*time.Second, req.MaxQueryTime)
 			require.True(t, req.AllowStale)
 
 			reply := args.Get(3).(*structs.IndexedNodesWithGateways)
 			reply.Nodes = []structs.CheckServiceNode{
 				{Service: &structs.NodeService{Kind: req.ServiceKind, Service: "foo"}},
 			}
-			reply.QueryMeta.Index = 48
+			reply.Index = 48
 			resp = reply
 		})
 
 	// Fetch
-	resultA, err := typ.Fetch(cache.FetchOptions{
-		MinIndex: 24,
-		Timeout:  1 * time.Second,
-	}, &structs.ServiceDumpRequest{
-		Datacenter:     "dc1",
-		ServiceKind:    structs.ServiceKindMeshGateway,
-		UseServiceKind: true,
-	})
+	resultA, err := typ.Fetch(
+		context.Background(),
+		cache.FetchOptions{
+			MinIndex: 24,
+			Timeout:  1 * time.Second,
+		}, &structs.ServiceDumpRequest{
+			Datacenter:     "dc1",
+			ServiceKind:    structs.ServiceKindMeshGateway,
+			UseServiceKind: true,
+		})
 	require.NoError(t, err)
 	require.Equal(t, cache.FetchResult{
 		Value: resp,
@@ -59,7 +62,7 @@ func TestInternalServiceDump_badReqType(t *testing.T) {
 	typ := &CatalogServices{RPC: rpc}
 
 	// Fetch
-	_, err := typ.Fetch(cache.FetchOptions{}, cache.TestRequest(
+	_, err := typ.Fetch(context.Background(), cache.FetchOptions{}, cache.TestRequest(
 		t, cache.RequestInfo{Key: "foo", MinIndex: 64}))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "wrong type")

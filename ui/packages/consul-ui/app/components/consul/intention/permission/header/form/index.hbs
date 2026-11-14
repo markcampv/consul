@@ -6,83 +6,105 @@
 <div
   ...attributes
   class="consul-intention-permission-header-form"
+  {{fix-super-select-aria}}
 >
   <FormGroup
-    @name={{name}}
+    @name={{this.name}}
   as |group|>
 
     {{yield (hash
-      submit=(action 'submit' changeset)
-      reset=(action 'reset' changeset)
+      submit=(action 'submit' this.changeset)
+      reset=(action 'reset' this.changeset)
 
-      isDirty=(and changeset.isValid changeset.isDirty)
-      changeset=changeset
+      isDirty=(and this.changeset.isValid this.changeset.isDirty)
+      changeset=this.changeset
     )}}
 
-    <fieldset>
-      <div>
-        <group.Element
-          @name="HeaderType"
-          @type="select"
-        as |el|>
-          <el.Label>Header type</el.Label>
-          <PowerSelect
-            @options={{headerTypes}}
-            @selected={{headerType}}
-            @onChange={{action 'change' 'HeaderType' changeset}} as |Type|>
-              {{get headerLabels Type}}
-          </PowerSelect>
-        </group.Element>
+    {{! aria-label so this <fieldset> (which groups the header type/name/
+        information row below) has an accessible name of its own. }}
+    <fieldset aria-label="Header">
+      <div class="header-row">
+        {{! Header type }}
+        <div class="header-col">
+          <group.Element
+            @name="HeaderType"
+            @type="select"
+          as |el|>
+            <Hds::Form::SuperSelect::Single::Field
+              @options={{this.headerTypes}}
+              @selected={{this.headerType}}
+              @onChange={{action 'change' 'HeaderType' this.changeset}}
+              {{! @id, not a bare "id=" — see the same fix in
+                  consul/intention/permission/form/index.hbs for why. }}
+              @id="header-type-select"
+            as |F|>
+              <F.Label class="header-col-label">Header type</F.Label>
+              <F.Options>{{get this.headerLabels F.options}}</F.Options>
+            </Hds::Form::SuperSelect::Single::Field>
+          </group.Element>
+        </div>
 
+        {{! Header name }}
+        <div class="header-col">
+          <group.Element
+            @name="Name"
+            @type="hds-field"
+          as |el|>
+            <Hds::Form::TextInput::Field
+              name="Name"
+              placeholder="Enter header name"
+              @value={{changeset-get this.changeset 'Name'}}
+              @isInvalid={{if (changeset-get this.changeset 'error.Name') true false}}
+              {{on "input" (action 'change' 'Name' this.changeset)}}
+            as |F|>
+              <F.Label class="header-col-label">Header name</F.Label>
+              {{#if (changeset-get this.changeset 'error.Name')}}
+                <F.Error>{{changeset-get this.changeset 'error.Name.validation'}}</F.Error>
+              {{/if}}
+            </Hds::Form::TextInput::Field>
+          </group.Element>
+        </div>
 
-        <group.Element
-          @name="Name"
-          @error={{changeset-get changeset 'error.Name'}}
-        as |el|>
-          <el.Label>Header name</el.Label>
-          <el.Text
-            @value={{changeset-get changeset 'Name'}}
-            oninput={{action 'change' 'Name' changeset}}
-          />
-          <State @state={{el.state}} @matches="error">
-            <el.Error>
-              {{changeset-get changeset 'error.Name.validation'}}
-            </el.Error>
-          </State>
-        </group.Element>
-
-  {{#if shouldShowValueField}}
-        <group.Element
-          @name="Value"
-          @error={{changeset-get changeset 'error.Value'}}
-        as |el|>
-          <el.Label>Header {{lowercase (get headerLabels headerType)}}</el.Label>
-          <el.Text
-            @value={{changeset-get changeset 'Value'}}
-            oninput={{action 'change' 'Value' changeset}}
-          />
-          <State @state={{el.state}} @matches="error">
-            <el.Error>
-              {{changeset-get changeset 'error.Value.validation'}}
-            </el.Error>
-          </State>
-        </group.Element>
+  {{#if this.shouldShowValueField}}
+        {{! Header information (value) }}
+        <div class="header-col">
+          <group.Element
+            @name="Value"
+            @type="hds-field"
+          as |el|>
+            <Hds::Form::TextInput::Field
+              name="Value"
+              placeholder="Enter header information"
+              @value={{changeset-get this.changeset 'Value'}}
+              @isInvalid={{if (changeset-get this.changeset 'error.Value') true false}}
+              {{on "input" (action 'change' 'Value' this.changeset)}}
+            as |F|>
+              <F.Label class="header-col-label">Header information</F.Label>
+              {{#if (changeset-get this.changeset 'error.Value')}}
+                <F.Error>{{changeset-get this.changeset 'error.Value.validation'}}</F.Error>
+              {{/if}}
+            </Hds::Form::TextInput::Field>
+          </group.Element>
+        </div>
+  {{else}}
+        {{! Spacer so the delete icon stays in column 4 when value field is hidden }}
+        <div class="header-col header-col--spacer"></div>
   {{/if}}
 
-  {{#if shouldShowIgnoreCaseField}}
-        <group.Element
-          @name="IgnoreCase"
-          @error={{changeset-get changeset 'error.IgnoreCase'}}
-        as |el|>
-          <el.Label>Ignore Case</el.Label>
-          <el.Checkbox
-            checked={{if IgnoreCase 'checked'}}
-            onchange={{action 'change' 'IgnoreCase' changeset}}
-          />
-        </group.Element>
-  {{/if}}
+        {{! Delete placeholder — keeps grid column 4 aligned to inputs }}
+        <div class="header-col header-col--action"></div>
 
-      </div>
+      </div>{{! /.header-row }}
+
+  {{#if this.shouldShowIgnoreCaseField}}
+      <Hds::Form::Checkbox::Field
+        @name="IgnoreCase"
+        checked={{if (changeset-get this.changeset 'IgnoreCase') true false}}
+        {{on "change" (action 'change' 'IgnoreCase' this.changeset)}}
+      as |F|>
+        <F.Label>Case sensitive</F.Label>
+      </Hds::Form::Checkbox::Field>
+  {{/if}}
     </fieldset>
   </FormGroup>
 </div>

@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package inspect
@@ -41,7 +41,7 @@ func NewFormatter(format string) (Formatter, error) {
 	}
 }
 
-func (_ *prettyFormatter) Format(info *OutputFormat) (string, error) {
+func (*prettyFormatter) Format(info *OutputFormat) (string, error) {
 	var b bytes.Buffer
 	tw := tabwriter.NewWriter(&b, 8, 8, 6, ' ', 0)
 
@@ -85,7 +85,7 @@ func newJSONFormatter() Formatter {
 	return &jsonFormatter{}
 }
 
-func (_ *jsonFormatter) Format(info *OutputFormat) (string, error) {
+func (*jsonFormatter) Format(info *OutputFormat) (string, error) {
 	b, err := json.MarshalIndent(info, "", "   ")
 	if err != nil {
 		return "", fmt.Errorf("Failed to marshal original snapshot stats: %v", err)

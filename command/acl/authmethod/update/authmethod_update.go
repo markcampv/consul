@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package authmethodupdate
@@ -45,6 +45,8 @@ type cmd struct {
 	noMerge  bool
 	showMeta bool
 	format   string
+
+	tokenNameFormat string
 
 	testStdin io.Reader
 
@@ -140,7 +142,12 @@ func (c *cmd) init() {
 		authmethod.PrettyFormat,
 		fmt.Sprintf("Output format {%s}", strings.Join(authmethod.GetSupportedFormats(), "|")),
 	)
-
+	c.flags.StringVar(
+		&c.tokenNameFormat,
+		"token-name-format",
+		"",
+		"Format used to specify the token name for the auth method. HashiCorp HIL syntax is supported.",
+	)
 	c.initEnterpriseFlags()
 
 	c.http = &flags.HTTPFlags{}
@@ -156,7 +163,7 @@ func (c *cmd) Run(args []string) int {
 	}
 
 	if c.name == "" {
-		c.UI.Error(fmt.Sprintf("Cannot update an auth method without specifying the -name parameter"))
+		c.UI.Error("Cannot update an auth method without specifying the -name parameter")
 		return 1
 	}
 
@@ -182,7 +189,7 @@ func (c *cmd) Run(args []string) int {
 			c.UI.Error(fmt.Sprintf("Invalid '-kubernetes-ca-cert' value: %v", err))
 			return 1
 		} else if c.k8sCACert == "" {
-			c.UI.Error(fmt.Sprintf("Kubernetes CA Cert is empty"))
+			c.UI.Error("Kubernetes CA Cert is empty")
 			return 1
 		}
 	}
@@ -190,11 +197,12 @@ func (c *cmd) Run(args []string) int {
 	var method *api.ACLAuthMethod
 	if c.noMerge {
 		method = &api.ACLAuthMethod{
-			Name:          currentAuthMethod.Name,
-			Type:          currentAuthMethod.Type,
-			DisplayName:   c.displayName,
-			Description:   c.description,
-			TokenLocality: c.tokenLocality,
+			Name:            currentAuthMethod.Name,
+			Type:            currentAuthMethod.Type,
+			DisplayName:     c.displayName,
+			Description:     c.description,
+			TokenLocality:   c.tokenLocality,
+			TokenNameFormat: c.tokenNameFormat,
 		}
 		if c.maxTokenTTL > 0 {
 			method.MaxTokenTTL = c.maxTokenTTL
@@ -207,7 +215,7 @@ func (c *cmd) Run(args []string) int {
 
 		if c.config != "" {
 			if c.k8sHost != "" || c.k8sCACert != "" || c.k8sServiceAccountJWT != "" {
-				c.UI.Error(fmt.Sprintf("Cannot use command line arguments with '-config' flag"))
+				c.UI.Error("Cannot use command line arguments with '-config' flag")
 				return 1
 			}
 			data, err := helpers.LoadDataSource(c.config, c.testStdin)
@@ -223,13 +231,13 @@ func (c *cmd) Run(args []string) int {
 
 		if currentAuthMethod.Type == "kubernetes" {
 			if c.k8sHost == "" {
-				c.UI.Error(fmt.Sprintf("Missing required '-kubernetes-host' flag"))
+				c.UI.Error("Missing required '-kubernetes-host' flag")
 				return 1
 			} else if c.k8sCACert == "" {
-				c.UI.Error(fmt.Sprintf("Missing required '-kubernetes-ca-cert' flag"))
+				c.UI.Error("Missing required '-kubernetes-ca-cert' flag")
 				return 1
 			} else if c.k8sServiceAccountJWT == "" {
-				c.UI.Error(fmt.Sprintf("Missing required '-kubernetes-service-account-jwt' flag"))
+				c.UI.Error("Missing required '-kubernetes-service-account-jwt' flag")
 				return 1
 			}
 
@@ -254,13 +262,16 @@ func (c *cmd) Run(args []string) int {
 		if c.tokenLocality != "" {
 			method.TokenLocality = c.tokenLocality
 		}
+		if c.tokenNameFormat != "" {
+			method.TokenNameFormat = c.tokenNameFormat
+		}
 		if err := c.enterprisePopulateAuthMethod(method); err != nil {
 			c.UI.Error(err.Error())
 			return 1
 		}
 		if c.config != "" {
 			if c.k8sHost != "" || c.k8sCACert != "" || c.k8sServiceAccountJWT != "" {
-				c.UI.Error(fmt.Sprintf("Cannot use command line arguments with '-config' flag"))
+				c.UI.Error("Cannot use command line arguments with '-config' flag")
 				return 1
 			}
 			data, err := helpers.LoadDataSource(c.config, c.testStdin)

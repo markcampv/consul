@@ -1,10 +1,11 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package structs
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -131,10 +132,10 @@ func (e *ServiceRouterConfigEntry) Normalize() error {
 		}
 
 		if route.Destination != nil && route.Destination.Namespace == "" {
-			route.Destination.Namespace = e.EnterpriseMeta.NamespaceOrEmpty()
+			route.Destination.Namespace = e.NamespaceOrEmpty()
 		}
 		if route.Destination != nil && route.Destination.Partition == "" {
-			route.Destination.Partition = e.EnterpriseMeta.PartitionOrEmpty()
+			route.Destination.Partition = e.PartitionOrEmpty()
 		}
 	}
 
@@ -337,7 +338,7 @@ func (e *ServiceRouterConfigEntry) ListRelatedServices() []ServiceID {
 		out = append(out, svc)
 	}
 	sort.Slice(out, func(i, j int) bool {
-		return out[i].EnterpriseMeta.LessThan(&out[j].EnterpriseMeta) ||
+		return out[i].LessThan(&out[j].EnterpriseMeta) ||
 			out[i].ID < out[j].ID
 	})
 	return out
@@ -358,12 +359,37 @@ type ServiceRoute struct {
 	Destination *ServiceRouteDestination `json:",omitempty"`
 }
 
+func (d *ServiceRoute) getHash() uint64 {
+	return hashValue(d)
+}
+
+func (d *ServiceRoute) appendHash(h *customHasher) {
+	if d == nil {
+		return
+	}
+
+	addOptionalValue(h, d.Match)
+	addOptionalValue(h, d.Destination)
+}
+
 // ServiceRouteMatch is a set of criteria that can match incoming L7 requests.
 type ServiceRouteMatch struct {
 	HTTP *ServiceRouteHTTPMatch `json:",omitempty"`
 
 	// If we have non-http match criteria for other protocols in the future
 	// (gRPC, redis, etc) they can go here.
+}
+
+func (m *ServiceRouteMatch) getHash() uint64 {
+	return hashValue(m)
+}
+
+func (m *ServiceRouteMatch) appendHash(h *customHasher) {
+	if m == nil {
+		return
+	}
+
+	addOptionalValue(h, m.HTTP)
 }
 
 func (m *ServiceRouteMatch) IsEmpty() bool {
@@ -380,6 +406,30 @@ type ServiceRouteHTTPMatch struct {
 	Header     []ServiceRouteHTTPMatchHeader     `json:",omitempty"`
 	QueryParam []ServiceRouteHTTPMatchQueryParam `json:",omitempty" alias:"query_param"`
 	Methods    []string                          `json:",omitempty"`
+}
+
+func (m *ServiceRouteHTTPMatch) getHash() uint64 {
+	return hashValue(m)
+}
+
+func (m *ServiceRouteHTTPMatch) appendHash(h *customHasher) {
+	if m == nil {
+		return
+	}
+
+	h.addString(m.PathExact)
+	h.addString(m.PathPrefix)
+	h.addString(m.PathRegex)
+	h.addBool(m.CaseInsensitive)
+	addSlice(h, m.Header, func(h *customHasher, header ServiceRouteHTTPMatchHeader) {
+		h.addUint64((&header).getHash())
+	})
+	addSlice(h, m.QueryParam, func(h *customHasher, queryParam ServiceRouteHTTPMatchQueryParam) {
+		h.addUint64((&queryParam).getHash())
+	})
+	addSlice(h, m.Methods, func(h *customHasher, method string) {
+		h.addString(method)
+	})
 }
 
 func (m *ServiceRouteHTTPMatch) IsEmpty() bool {
@@ -402,11 +452,44 @@ type ServiceRouteHTTPMatchHeader struct {
 	Invert  bool   `json:",omitempty"`
 }
 
+func (d *ServiceRouteHTTPMatchHeader) getHash() uint64 {
+	return hashValue(d)
+}
+
+func (d *ServiceRouteHTTPMatchHeader) appendHash(h *customHasher) {
+	if d == nil {
+		return
+	}
+
+	h.addString(d.Name)
+	h.addBool(d.Present)
+	h.addString(d.Exact)
+	h.addString(d.Prefix)
+	h.addString(d.Suffix)
+	h.addString(d.Regex)
+	h.addBool(d.Invert)
+}
+
 type ServiceRouteHTTPMatchQueryParam struct {
 	Name    string
 	Present bool   `json:",omitempty"`
 	Exact   string `json:",omitempty"`
 	Regex   string `json:",omitempty"`
+}
+
+func (d *ServiceRouteHTTPMatchQueryParam) getHash() uint64 {
+	return hashValue(d)
+}
+
+func (d *ServiceRouteHTTPMatchQueryParam) appendHash(h *customHasher) {
+	if d == nil {
+		return
+	}
+
+	h.addString(d.Name)
+	h.addBool(d.Present)
+	h.addString(d.Exact)
+	h.addString(d.Regex)
 }
 
 // ServiceRouteDestination describes how to proxy the actual matching request
@@ -471,6 +554,34 @@ type ServiceRouteDestination struct {
 	// Allow HTTP header manipulation to be configured.
 	RequestHeaders  *HTTPHeaderModifiers `json:",omitempty" alias:"request_headers"`
 	ResponseHeaders *HTTPHeaderModifiers `json:",omitempty" alias:"response_headers"`
+}
+
+func (d *ServiceRouteDestination) getHash() uint64 {
+	return hashValue(d)
+}
+
+func (d *ServiceRouteDestination) appendHash(h *customHasher) {
+	if d == nil {
+		return
+	}
+
+	h.addString(d.Service)
+	h.addString(d.ServiceSubset)
+	h.addString(d.Namespace)
+	h.addString(d.Partition)
+	h.addString(d.PrefixRewrite)
+	h.addDuration(d.RequestTimeout)
+	h.addDuration(d.IdleTimeout)
+	h.addUint64(uint64(d.NumRetries))
+	h.addBool(d.RetryOnConnectFailure)
+	addSlice(h, d.RetryOn, func(h *customHasher, retryOn string) {
+		h.addString(retryOn)
+	})
+	addSlice(h, d.RetryOnStatusCodes, func(h *customHasher, statusCode uint32) {
+		h.addUint64(uint64(statusCode))
+	})
+	addOptionalValue(h, d.RequestHeaders)
+	addOptionalValue(h, d.ResponseHeaders)
 }
 
 func (e *ServiceRouteDestination) MarshalJSON() ([]byte, error) {
@@ -600,7 +711,7 @@ func (e *ServiceSplitterConfigEntry) Normalize() error {
 	if len(e.Splits) > 0 {
 		for i, split := range e.Splits {
 			if split.Namespace == "" {
-				split.Namespace = e.EnterpriseMeta.NamespaceOrDefault()
+				split.Namespace = e.NamespaceOrDefault()
 			}
 			e.Splits[i].Weight = NormalizeServiceSplitWeight(split.Weight)
 		}
@@ -720,7 +831,7 @@ func (e *ServiceSplitterConfigEntry) ListRelatedServices() []ServiceID {
 		out = append(out, svc)
 	}
 	sort.Slice(out, func(i, j int) bool {
-		return out[i].EnterpriseMeta.LessThan(&out[j].EnterpriseMeta) ||
+		return out[i].LessThan(&out[j].EnterpriseMeta) ||
 			out[i].ID < out[j].ID
 	})
 	return out
@@ -769,6 +880,24 @@ type ServiceSplit struct {
 	// Allow HTTP header manipulation to be configured.
 	RequestHeaders  *HTTPHeaderModifiers `json:",omitempty" alias:"request_headers"`
 	ResponseHeaders *HTTPHeaderModifiers `json:",omitempty" alias:"response_headers"`
+}
+
+func (d *ServiceSplit) getHash() uint64 {
+	return hashValue(d)
+}
+
+func (d *ServiceSplit) appendHash(h *customHasher) {
+	if d == nil {
+		return
+	}
+
+	h.addFloat32(d.Weight)
+	h.addString(d.Service)
+	h.addString(d.ServiceSubset)
+	h.addString(d.Namespace)
+	h.addString(d.Partition)
+	addOptionalValue(h, d.RequestHeaders)
+	addOptionalValue(h, d.ResponseHeaders)
 }
 
 // MergeParent is called by the discovery chain compiler when a split directs to
@@ -1153,15 +1282,15 @@ func (e *ServiceResolverConfigEntry) Validate() error {
 			errorPrefix := fmt.Sprintf("Bad Failover[%q]: ", subset)
 
 			if err := f.ValidateEnterprise(); err != nil {
-				return fmt.Errorf(errorPrefix + err.Error())
+				return errors.New(errorPrefix + err.Error())
 			}
 
 			if subset != "*" && !isSubset(subset) {
-				return fmt.Errorf(errorPrefix + "not a valid subset subset")
+				return errors.New(errorPrefix + "not a valid subset subset")
 			}
 
 			if f.isEmpty() {
-				return fmt.Errorf(errorPrefix + "one of Service, ServiceSubset, Namespace, Targets, SamenessGroup, or Datacenters is required")
+				return errors.New(errorPrefix + "one of Service, ServiceSubset, Namespace, Targets, SamenessGroup, or Datacenters is required")
 			}
 
 			if err := f.Policy.ValidateEnterprise(); err != nil {
@@ -1207,18 +1336,18 @@ func (e *ServiceResolverConfigEntry) Validate() error {
 				errorPrefix := fmt.Sprintf("Bad Failover[%q].Targets[%d]: ", subset, i)
 
 				if err := target.ValidateEnterprise(); err != nil {
-					return fmt.Errorf(errorPrefix + err.Error())
+					return errors.New(errorPrefix + err.Error())
 				}
 
 				switch {
 				case target.Peer != "" && target.ServiceSubset != "":
-					return fmt.Errorf(errorPrefix + "Peer cannot be set with ServiceSubset")
+					return errors.New(errorPrefix + "Peer cannot be set with ServiceSubset")
 				case target.Peer != "" && target.Partition != "":
-					return fmt.Errorf(errorPrefix + "Partition cannot be set with Peer")
+					return errors.New(errorPrefix + "Partition cannot be set with Peer")
 				case target.Peer != "" && target.Datacenter != "":
-					return fmt.Errorf(errorPrefix + "Peer cannot be set with Datacenter")
+					return errors.New(errorPrefix + "Peer cannot be set with Datacenter")
 				case target.Partition != "" && target.Datacenter != "":
-					return fmt.Errorf(errorPrefix + "Partition cannot be set with Datacenter")
+					return errors.New(errorPrefix + "Partition cannot be set with Datacenter")
 				case target.ServiceSubset != "" && (target.Service == "" || target.Service == e.Name):
 					if !isSubset(target.ServiceSubset) {
 						return fmt.Errorf("%sServiceSubset %q is not a valid subset of %q", errorPrefix, target.ServiceSubset, e.Name)
@@ -1364,7 +1493,7 @@ func (e *ServiceResolverConfigEntry) ListRelatedServices() []ServiceID {
 		out = append(out, svc)
 	}
 	sort.Slice(out, func(i, j int) bool {
-		return out[i].EnterpriseMeta.LessThan(&out[j].EnterpriseMeta) ||
+		return out[i].LessThan(&out[j].EnterpriseMeta) ||
 			out[i].ID < out[j].ID
 	})
 	return out
@@ -1386,6 +1515,19 @@ type ServiceResolverSubset struct {
 	// returned. (behaves identically to the similarly named field on prepared
 	// queries).
 	OnlyPassing bool `json:",omitempty" alias:"only_passing"`
+}
+
+func (c *ServiceResolverSubset) getHash() uint64 {
+	return hashValue(c)
+}
+
+func (c *ServiceResolverSubset) appendHash(h *customHasher) {
+	if c == nil {
+		return
+	}
+
+	h.addString(c.Filter)
+	h.addBool(c.OnlyPassing)
 }
 
 type ServiceResolverRedirect struct {
@@ -1524,6 +1666,21 @@ type ServiceResolverFailoverPolicy struct {
 	Regions []string `json:",omitempty"`
 }
 
+func (fp *ServiceResolverFailoverPolicy) getHash() uint64 {
+	return hashValue(fp)
+}
+
+func (fp *ServiceResolverFailoverPolicy) appendHash(h *customHasher) {
+	if fp == nil {
+		return
+	}
+
+	h.addString(fp.Mode)
+	addSlice(h, fp.Regions, func(h *customHasher, region string) {
+		h.addString(region)
+	})
+}
+
 func (fp *ServiceResolverFailoverPolicy) validate() error {
 	if fp == nil {
 		return nil
@@ -1597,6 +1754,23 @@ type LoadBalancer struct {
 	HashPolicies []HashPolicy `json:",omitempty" alias:"hash_policies"`
 }
 
+func (c *LoadBalancer) getHash() uint64 {
+	return hashValue(c)
+}
+
+func (c *LoadBalancer) appendHash(h *customHasher) {
+	if c == nil {
+		return
+	}
+
+	h.addString(c.Policy)
+	addOptionalValue(h, c.RingHashConfig)
+	addOptionalValue(h, c.LeastRequestConfig)
+	addSlice(h, c.HashPolicies, func(h *customHasher, hashPolicy HashPolicy) {
+		h.addUint64((&hashPolicy).getHash())
+	})
+}
+
 // RingHashConfig contains configuration for the "ring_hash" policy type
 type RingHashConfig struct {
 	// MinimumRingSize determines the minimum number of entries in the hash ring
@@ -1606,10 +1780,35 @@ type RingHashConfig struct {
 	MaximumRingSize uint64 `json:",omitempty" alias:"maximum_ring_size"`
 }
 
+func (c *RingHashConfig) getHash() uint64 {
+	return hashValue(c)
+}
+
+func (c *RingHashConfig) appendHash(h *customHasher) {
+	if c == nil {
+		return
+	}
+
+	h.addUint64(c.MinimumRingSize)
+	h.addUint64(c.MaximumRingSize)
+}
+
 // LeastRequestConfig contains configuration for the "least_request" policy type
 type LeastRequestConfig struct {
 	// ChoiceCount determines the number of random healthy hosts from which to select the one with the least requests.
 	ChoiceCount uint32 `json:",omitempty" alias:"choice_count"`
+}
+
+func (c *LeastRequestConfig) getHash() uint64 {
+	return hashValue(c)
+}
+
+func (c *LeastRequestConfig) appendHash(h *customHasher) {
+	if c == nil {
+		return
+	}
+
+	h.addUint64(uint64(c.ChoiceCount))
 }
 
 // HashPolicy defines which attributes will be hashed by hash-based LB algorithms
@@ -1637,6 +1836,22 @@ type HashPolicy struct {
 	Terminal bool `json:",omitempty"`
 }
 
+func (c *HashPolicy) getHash() uint64 {
+	return hashValue(c)
+}
+
+func (c *HashPolicy) appendHash(h *customHasher) {
+	if c == nil {
+		return
+	}
+
+	h.addString(c.Field)
+	h.addString(c.FieldValue)
+	addOptionalValue(h, c.CookieConfig)
+	h.addBool(c.SourceIP)
+	h.addBool(c.Terminal)
+}
+
 // CookieConfig contains configuration for the "cookie" hash policy type.
 // This is specified to have Envoy generate a cookie for a client on its first request.
 type CookieConfig struct {
@@ -1648,6 +1863,20 @@ type CookieConfig struct {
 
 	// The path to set for the cookie
 	Path string `json:",omitempty"`
+}
+
+func (c *CookieConfig) getHash() uint64 {
+	return hashValue(c)
+}
+
+func (c *CookieConfig) appendHash(h *customHasher) {
+	if c == nil {
+		return
+	}
+
+	h.addBool(c.Session)
+	h.addDuration(c.TTL)
+	h.addString(c.Path)
 }
 
 func (lb *LoadBalancer) IsHashBased() bool {
@@ -1764,7 +1993,7 @@ func (r *DiscoveryChainRequest) CacheInfo() cache.RequestInfo {
 		OverrideMeshGateway:    r.OverrideMeshGateway,
 		OverrideProtocol:       r.OverrideProtocol,
 		OverrideConnectTimeout: r.OverrideConnectTimeout,
-		Filter:                 r.QueryOptions.Filter,
+		Filter:                 r.Filter,
 	}, nil)
 	if err == nil {
 		// If there is an error, we don't set the key. A blank key forces
@@ -1844,6 +2073,28 @@ type HTTPHeaderModifiers struct {
 	// Remove is the set of header names that should be stripped from the request
 	// or response.
 	Remove []string `json:",omitempty"`
+}
+
+func (m *HTTPHeaderModifiers) getHash() uint64 {
+	return hashValue(m)
+}
+
+func (m *HTTPHeaderModifiers) appendHash(h *customHasher) {
+	if m == nil {
+		return
+	}
+
+	addSortedStringKeyMap(h, m.Add, func(h *customHasher, key, value string) {
+		h.addString(key)
+		h.addString(value)
+	})
+	addSortedStringKeyMap(h, m.Set, func(h *customHasher, key, value string) {
+		h.addString(key)
+		h.addString(value)
+	})
+	addSlice(h, m.Remove, func(h *customHasher, value string) {
+		h.addString(value)
+	})
 }
 
 func (m *HTTPHeaderModifiers) IsZero() bool {

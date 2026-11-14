@@ -1,11 +1,13 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 .tomography-graph {
   .background {
-    fill: var(--token-color-surface-strong);
+    /* Figma target places the graph on the card's white surface with only
+       dashed ring outlines — no filled disc. */
+    fill: transparent;
   }
   .axis {
     fill: none;

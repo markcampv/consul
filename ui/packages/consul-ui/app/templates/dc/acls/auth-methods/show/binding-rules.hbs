@@ -4,7 +4,7 @@
 }}
 
 <Route
-  @name={{routeName}}
+  @name={{this.routeName}}
 as |route|>
 
   <DataLoader @src={{
@@ -15,17 +15,20 @@ as |route|>
         dc=route.params.dc
         name=route.params.id
       )
-    }}
-  as |loader|>
+    }}>
+  
 
-    <BlockSlot @name="error">
-      <AppError
-        @error={{loader.error}}
-        @login={{route.model.app.login.open}}
-      />
-    </BlockSlot>
+    <:error as |loader|>
+      <div class="tab-section">
+        <AppError
+          @nested={{true}}
+          @error={{loader.error}}
+          @login={{route.model.app.login.open}}
+        />
+      </div>
+    </:error>
 
-    <BlockSlot @name="loaded">
+    <:loaded as |loader|>
 {{#let
   loader.data
 as |items|}}
@@ -38,33 +41,31 @@ as |items|}}
     <p>
       Successful authentication with an auth method returns a set of trusted identity attributes corresponding to the authenticated identity. Those attributes are matched against all configured binding rules for that auth method to determine what privileges to grant the Consul ACL token it will ultimately create.
     </p>
-    <hr />
     {{#each items as |item|}}
       <Consul::AuthMethod::BindingList @item={{item}} />
-      <hr />
     {{/each}}
   {{else}}
     <EmptyState>
-      <BlockSlot @name="header">
+      <:header>
         <h2>
           {{t 'routes.dc.acls.auth-methods.show.binding-rules.index.empty.header'}}
         </h2>
-      </BlockSlot>
-      <BlockSlot @name="body">
+      </:header>
+      <:body>
         {{t 'routes.dc.acls.auth-methods.show.binding-rules.index.empty.body'
           htmlSafe=true
-        }}
-      </BlockSlot>
-      <BlockSlot @name="actions">
+        }}>
+      </:body>
+      <:actions>
         <li class="docs-link">
           <a href="{{env 'CONSUL_DOCS_API_URL'}}/acl/binding-rules" rel="noopener noreferrer" target="_blank">Read the documentation</a>
         </li>
-      </BlockSlot>
+      </:actions>
     </EmptyState>
   {{/if}}
   </div>
 {{/let}}
 
-    </BlockSlot>
+    </:loaded>
   </DataLoader>
 </Route>

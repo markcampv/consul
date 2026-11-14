@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package flags
@@ -11,8 +11,7 @@ import (
 
 func TestAppendSliceValue_implements(t *testing.T) {
 	t.Parallel()
-	var raw interface{}
-	raw = new(AppendSliceValue)
+	var raw interface{} = new(AppendSliceValue)
 	if _, ok := raw.(flag.Value); !ok {
 		t.Fatalf("AppendSliceValue should be a Value")
 	}

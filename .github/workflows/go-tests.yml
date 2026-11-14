@@ -4,12 +4,12 @@ on:
   pull_request:
     branches-ignore:
       - stable-website
-      - 'docs/**'
       - 'ui/**'
       - 'mktg-**' # Digital Team Terraform-generated branches' prefix
-      - 'backport/docs/**'
       - 'backport/ui/**'
       - 'backport/mktg-**'
+    # ready_for_review lets coverage run when a draft is marked ready.
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches:
       # Push events on the main branch
@@ -18,6 +18,8 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
+  id-token: write
 
 env:
   TEST_RESULTS: /tmp/test-results
@@ -25,7 +27,7 @@ env:
 
 # concurrency
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  group: go-tests-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -43,7 +45,7 @@ jobs:
       compute-large: ${{ steps.setup-outputs.outputs.compute-large }}
       compute-xl: ${{ steps.setup-outputs.outputs.compute-xl }}
     steps:
-    - uses: actions/checkout@0ad4b8fadaa221de15dcec353f45205ec38ea70b # v4.1.4
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
     - id: setup-outputs
       name: Setup outputs
       run: ./.github/scripts/get_runner_classes.sh
@@ -69,12 +71,12 @@ jobs:
     - get-go-version
     runs-on: ${{ fromJSON(needs.setup.outputs.compute-medium) }}
     steps:
-    - uses: actions/checkout@0ad4b8fadaa221de15dcec353f45205ec38ea70b # v4.1.4
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
     # NOTE: This step is specifically needed for ENT. It allows us to access the required private HashiCorp repos.
     - name: Setup Git
       if: ${{ endsWith(github.repository, '-enterprise') }}
       run: git config --global url."https://${{ secrets.ELEVATED_GITHUB_TOKEN }}:@github.com".insteadOf "https://github.com"
-    - uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
+    - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
       with:
         go-version: ${{ needs.get-go-version.outputs.go-version }}
     - run: make proto-tools
@@ -95,12 +97,12 @@ jobs:
      - get-go-version
      runs-on: ${{ fromJSON(needs.setup.outputs.compute-large) }}
      steps:
-     - uses: actions/checkout@0ad4b8fadaa221de15dcec353f45205ec38ea70b # v4.1.4
+     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
      # NOTE: This step is specifically needed for ENT. It allows us to access the required private HashiCorp repos.
      - name: Setup Git
        if: ${{ endsWith(github.repository, '-enterprise') }}
        run: git config --global url."https://${{ secrets.ELEVATED_GITHUB_TOKEN }}:@github.com".insteadOf "https://github.com"
-     - uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
+     - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
        with:
          go-version: ${{ needs.get-go-version.outputs.go-version }}
      - run: make --always-make codegen
@@ -116,12 +118,12 @@ jobs:
     - get-go-version
     runs-on: ${{ fromJSON(needs.setup.outputs.compute-large) }}
     steps:
-    - uses: actions/checkout@0ad4b8fadaa221de15dcec353f45205ec38ea70b # v4.1.4
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
     # NOTE: This step is specifically needed for ENT. It allows us to access the required private HashiCorp repos.
     - name: Setup Git
       if: ${{ endsWith(github.repository, '-enterprise') }}
       run: git config --global url."https://${{ secrets.ELEVATED_GITHUB_TOKEN }}:@github.com".insteadOf "https://github.com"
-    - uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
+    - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
       with:
         go-version: ${{ needs.get-go-version.outputs.go-version }}
     - run: go install github.com/reillywatson/enumcover/cmd/enumcover@master && enumcover ./...
@@ -132,11 +134,11 @@ jobs:
     - get-go-version
     runs-on: ${{ fromJSON(needs.setup.outputs.compute-small) }}
     steps:
-    - uses: actions/checkout@0ad4b8fadaa221de15dcec353f45205ec38ea70b # v4.1.4
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
     # NOTE: This step is specifically needed for ENT. It allows us to access the required private HashiCorp repos.
     - name: Setup Git
       run: git config --global url."https://${{ secrets.ELEVATED_GITHUB_TOKEN }}:@github.com".insteadOf "https://github.com"
-    - uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
+    - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
       with:
         go-version: ${{ needs.get-go-version.outputs.go-version }}
     - run: make lint-container-test-deps
@@ -147,12 +149,12 @@ jobs:
     - get-go-version
     runs-on: ${{ fromJSON(needs.setup.outputs.compute-small) }}
     steps:
-    - uses: actions/checkout@0ad4b8fadaa221de15dcec353f45205ec38ea70b # v4.1.4
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
     # NOTE: This step is specifically needed for ENT. It allows us to access the required private HashiCorp repos.
     - name: Setup Git
       if: ${{ endsWith(github.repository, '-enterprise') }}
       run: git config --global url."https://${{ secrets.ELEVATED_GITHUB_TOKEN }}:@github.com".insteadOf "https://github.com"
-    - uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
+    - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
       with:
         go-version: ${{ needs.get-go-version.outputs.go-version }}
     - run: make lint-consul-retry
@@ -258,7 +260,7 @@ jobs:
       runner-count: 6
       runs-on: ${{ needs.setup.outputs.compute-large }}
       repository-name: ${{ github.repository }}
-      go-tags: ""
+      go-tags: "hashicorpmetrics"
       go-version: ${{ needs.get-go-version.outputs.go-version }}
     permissions:
       id-token: write # NOTE: this permission is explicitly required for Vault auth.
@@ -280,7 +282,7 @@ jobs:
       runner-count: 6
       runs-on: ${{ needs.setup.outputs.compute-large }}
       repository-name: ${{ github.repository }}
-      go-tags: "${{ github.event.repository.name == 'consul-enterprise' && 'consulent consuldev' || '' }}"
+      go-tags: "${{ github.event.repository.name == 'consul-enterprise' && 'consulent consuldev hashicorpmetrics' || 'hashicorpmetrics' }}"
       go-version: ${{ needs.get-go-version.outputs.go-version }}
     permissions:
       id-token: write # NOTE: this permission is explicitly required for Vault auth.
@@ -302,7 +304,7 @@ jobs:
       package-names-command: "go list ./... | grep -E -v '^github.com/hashicorp/consul/agent(/consul|/local|/routine-leak-checker)?$' | grep -E -v '^github.com/hashicorp/consul(/command|/connect|/snapshot)'"
       runs-on: ${{ needs.setup.outputs.compute-large }}
       repository-name: ${{ github.repository }}
-      go-tags: "${{ github.event.repository.name == 'consul-enterprise' && 'consulent consuldev' || '' }}"
+      go-tags: "${{ github.event.repository.name == 'consul-enterprise' && 'consulent consuldev hashicorpmetrics' || 'hashicorpmetrics' }}"
       go-version: ${{ needs.get-go-version.outputs.go-version }}
     permissions:
       id-token: write # NOTE: this permission is explicitly required for Vault auth.
@@ -324,7 +326,7 @@ jobs:
       go-test-flags: "-short"
       runs-on: ${{ needs.setup.outputs.compute-large }}
       repository-name: ${{ github.repository }}
-      go-tags: "${{ github.event.repository.name == 'consul-enterprise' && 'consulent consuldev' || '' }}"
+      go-tags: "${{ github.event.repository.name == 'consul-enterprise' && 'consulent consuldev hashicorpmetrics' || 'hashicorpmetrics' }}"
       go-version: ${{ needs.get-go-version.outputs.go-version }}
     permissions:
       id-token: write # NOTE: this permission is explicitly required for Vault auth.
@@ -347,7 +349,7 @@ jobs:
   #     go-test-flags: -short"
   #     runs-on: ${{ needs.setup.outputs.compute-large }}
   #     repository-name: ${{ github.repository }}
-  #     go-tags: "${{ github.event.repository.name == 'consul-enterprise' && 'consulent consuldev' || '' }}"
+  #     go-tags: "${{ github.event.repository.name == 'consul-enterprise' && 'consulent consuldev hashicorpmetrics' || 'hashicorpmetrics' }}"
   #     go-version: ${{ needs.get-go-version.outputs.go-version }}
   #   permissions:
   #     id-token: write # NOTE: this permission is explicitly required for Vault auth.
@@ -367,8 +369,9 @@ jobs:
       directory: envoyextensions
       runs-on: ${{ needs.setup.outputs.compute-large }}
       repository-name: ${{ github.repository }}
-      go-tags: "${{ github.event.repository.name == 'consul-enterprise' && 'consulent consuldev' || '' }}"
+      go-tags: "${{ github.event.repository.name == 'consul-enterprise' && 'consulent consuldev hashicorpmetrics' || 'hashicorpmetrics' }}"
       go-version: ${{ needs.get-go-version.outputs.go-version }}
+      upload-coverage: true
     permissions:
       id-token: write # NOTE: this permission is explicitly required for Vault auth.
       contents: read
@@ -387,8 +390,9 @@ jobs:
       directory: troubleshoot
       runs-on: ${{ needs.setup.outputs.compute-large }}
       repository-name: ${{ github.repository }}
-      go-tags: "${{ github.event.repository.name == 'consul-enterprise' && 'consulent consuldev' || '' }}"
+      go-tags: "${{ github.event.repository.name == 'consul-enterprise' && 'consulent consuldev hashicorpmetrics' || 'hashicorpmetrics' }}"
       go-version: ${{ needs.get-go-version.outputs.go-version }}
+      upload-coverage: true
     permissions:
       id-token: write # NOTE: this permission is explicitly required for Vault auth.
       contents: read
@@ -408,7 +412,7 @@ jobs:
       directory: api
       runs-on: ${{ needs.setup.outputs.compute-large }}
       repository-name: ${{ github.repository }}
-      go-tags: "${{ github.event.repository.name == 'consul-enterprise' && 'consulent consuldev' || '' }}"
+      go-tags: "${{ github.event.repository.name == 'consul-enterprise' && 'consulent consuldev hashicorpmetrics' || 'hashicorpmetrics' }}"
       go-version: ${{ needs.get-go-version.outputs.go-version-previous }}
     permissions:
       id-token: write # NOTE: this permission is explicitly required for Vault auth.
@@ -428,8 +432,9 @@ jobs:
       directory: api
       runs-on: ${{ needs.setup.outputs.compute-large }}
       repository-name: ${{ github.repository }}
-      go-tags: "${{ github.event.repository.name == 'consul-enterprise' && 'consulent consuldev' || '' }}"
+      go-tags: "${{ github.event.repository.name == 'consul-enterprise' && 'consulent consuldev hashicorpmetrics' || 'hashicorpmetrics' }}"
       go-version: ${{ needs.get-go-version.outputs.go-version }}
+      upload-coverage: true
     permissions:
       id-token: write # NOTE: this permission is explicitly required for Vault auth.
       contents: read
@@ -449,7 +454,7 @@ jobs:
       directory: sdk
       runs-on: ${{ needs.setup.outputs.compute-large }}
       repository-name: ${{ github.repository }}
-      go-tags: "${{ github.event.repository.name == 'consul-enterprise' && 'consulent consuldev' || '' }}"
+      go-tags: "${{ github.event.repository.name == 'consul-enterprise' && 'consulent consuldev hashicorpmetrics' || 'hashicorpmetrics' }}"
       go-version: ${{ needs.get-go-version.outputs.go-version-previous }}
     permissions:
       id-token: write # NOTE: this permission is explicitly required for Vault auth.
@@ -469,8 +474,9 @@ jobs:
       directory: sdk
       runs-on: ${{ needs.setup.outputs.compute-large }}
       repository-name: ${{ github.repository }}
-      go-tags: "${{ github.event.repository.name == 'consul-enterprise' && 'consulent consuldev' || '' }}"
+      go-tags: "${{ github.event.repository.name == 'consul-enterprise' && 'consulent consuldev hashicorpmetrics' || 'hashicorpmetrics' }}"
       go-version: ${{ needs.get-go-version.outputs.go-version }}
+      upload-coverage: true
     permissions:
       id-token: write # NOTE: this permission is explicitly required for Vault auth.
       contents: read
@@ -489,7 +495,7 @@ jobs:
       directory: testing/deployer
       runs-on: ${{ needs.setup.outputs.compute-large }}
       repository-name: ${{ github.repository }}
-      go-tags: "${{ github.event.repository.name == 'consul-enterprise' && 'consulent consuldev' || '' }}"
+      go-tags: "${{ github.event.repository.name == 'consul-enterprise' && 'consulent consuldev hashicorpmetrics' || 'hashicorpmetrics' }}"
       go-version: ${{ needs.get-go-version.outputs.go-version }}
     permissions:
       id-token: write # NOTE: this permission is explicitly required for Vault auth.
@@ -498,6 +504,95 @@ jobs:
       elevated-github-token: ${{ secrets.ELEVATED_GITHUB_TOKEN }}
       consul-license: ${{secrets.CONSUL_LICENSE}}
       datadog-api-key: "${{ !endsWith(github.repository, '-enterprise') && secrets.DATADOG_API_KEY || '' }}"
+
+  coverage-report:
+    needs:
+    - get-go-version
+    - go-test-ce
+    - go-test-envoyextensions
+    - go-test-troubleshoot
+    - go-test-api
+    - go-test-sdk
+    if: ${{ !cancelled() && needs.go-test-ce.result != 'skipped' && !github.event.pull_request.draft }}
+    uses: ./.github/workflows/reusable-coverage-report.yml
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    with:
+      go-version: ${{ needs.get-go-version.outputs.go-version }}
+      pr-number: ${{ github.event_name == 'pull_request' && toJson(github.event.pull_request.number) || '' }}
+
+  coverage-gate:
+    name: coverage-gate
+    needs: [coverage-report]
+    # Patch coverage measures the lines a PR adds/modifies, so it only applies
+    # to pull requests. Pushes to main run coverage-report for the badge but
+    # have no "patch" to evaluate. Draft PRs are skipped until marked ready.
+    # Only gate when the report succeeded.
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.coverage-report.result == 'success' && !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    env:
+      # Minimum required coverage of the lines a PR adds/modifies (patch
+      # coverage). New/changed code must be at least this well tested.
+      PATCH_THRESHOLD: "90"
+    steps:
+      - name: Enforce patch coverage threshold
+        env:
+          PATCH: ${{ needs.coverage-report.outputs.patch }}
+          COVERED: ${{ needs.coverage-report.outputs.patch_covered }}
+          COVERABLE: ${{ needs.coverage-report.outputs.patch_coverable }}
+        run: |
+          set -euo pipefail
+
+          echo "Patch coverage:     ${PATCH:-<empty>}"
+          echo "Required threshold: ${PATCH_THRESHOLD}%"
+          echo "Changed lines:      ${COVERED:-0}/${COVERABLE:-0} covered"
+
+          # No coverable Go lines changed (docs/test-only, or only modules
+          # without coverage data) -> nothing to gate.
+          # Fail closed: an empty PATCH means the reusable workflow could not
+          # compute patch coverage (no coverage profile produced, so the patch
+          # step was skipped). Don't let the gate pass unevaluated.
+          if [ -z "${PATCH}" ]; then
+            echo "::error::Patch coverage was not computed (no coverage profile produced). Failing closed."
+            {
+              echo "### ❌ Coverage gate failed"
+              echo ""
+              echo "Patch coverage could not be computed because no coverage profile was produced (unit tests may not have run or emitted coverage)."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          if [ "${PATCH}" = "N/A" ]; then
+            echo "::notice::No coverable Go lines changed in this PR; patch-coverage gate skipped."
+            {
+              echo "### ✅ Coverage gate passed"
+              echo ""
+              echo "No coverable Go lines changed in this PR, so there is nothing to gate."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if awk -v covered="${COVERED}" -v coverable="${COVERABLE}" -v threshold="${PATCH_THRESHOLD}" 'BEGIN { exit !(covered*100 >= threshold*coverable) }'; then
+            echo "::notice::Patch coverage ${PATCH} meets the ${PATCH_THRESHOLD}% threshold."
+            {
+              echo "### ✅ Coverage gate passed"
+              echo ""
+              echo "Patch coverage **${PATCH}** (${COVERED}/${COVERABLE} changed lines) ≥ required **${PATCH_THRESHOLD}%**."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error::Patch coverage ${PATCH} is below the required ${PATCH_THRESHOLD}% threshold."
+            {
+              echo "### ❌ Coverage gate failed"
+              echo ""
+              echo "Patch coverage **${PATCH}** (${COVERED}/${COVERABLE} changed lines) is below the required **${PATCH_THRESHOLD}%** threshold."
+              echo ""
+              echo "The lines this PR adds or modifies are not sufficiently covered by tests."
+              echo "Add tests for the new/changed code, or adjust \`PATCH_THRESHOLD\` in \`.github/workflows/go-tests.yml\` (with reviewer sign-off)."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
 
   noop:
     runs-on: ubuntu-latest
@@ -543,6 +638,8 @@ jobs:
     - go-test-32bit
     - go-test-testing-deployer
     # - go-test-s390x
+    - coverage-report
+    - coverage-gate
     runs-on: ${{ fromJSON(needs.setup.outputs.compute-small) }}
     if: always() && needs.conditional-skip.outputs.skip-ci != 'true'
     steps:
@@ -562,6 +659,8 @@ jobs:
           # Capturing in an env var makes this safe against GHA shell injection via commit message.
           # See https://securitylab.github.com/research/github-actions-untrusted-input/
           COMMIT_MESSAGE_FULL: ${{ github.event.head_commit.message }}
+          # Capturing workflow name in env var to prevent shell injection
+          WORKFLOW_NAME: ${{ github.workflow }}
         run: |
           # if failure (not cancelled), notify Slack
           if printf '${{ toJSON(needs) }}' | grep -E -i '\"result\": \"(failure)\"'; then
@@ -574,7 +673,7 @@ jobs:
             # Send multi-line env var to GITHUB_ENV.
             # github.event.head_commit.message and github.ref_name both rely on this event occurring on a push / merge
             echo "SLACK_MESSAGE_RAW<<EOF" >> $GITHUB_ENV
-            echo "❌ ${{ github.workflow }} workflow failed:
+            echo "❌ ${WORKFLOW_NAME} workflow failed:
             
             - Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
             - Branch: ${{ github.ref_name }}

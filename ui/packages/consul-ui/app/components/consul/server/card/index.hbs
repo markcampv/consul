@@ -3,42 +3,51 @@
   SPDX-License-Identifier: BUSL-1.1
 }}
 
-<div
+<Hds::Card::Container
+  @level="mid"
+  @levelHover="high"
+  @levelActive="mid"
+  @hasBorder={{true}}
+  @overflow="hidden"
   class={{class-map
     'consul-server-card'
-    (array 'voting-status-leader' (eq @item.Status 'leader'))
-    (array 'voting-status-voter' (and
-      (not @item.ReadReplica)
-      (eq @item.Status 'voter')
-    ))
-    (array 'voting-status-non-voter' (or
-      @item.ReadReplica
-      (includes @item.Status (array 'non-voter' 'staging'))
-    ))
+    (array 'consul-server-card--leader' (eq @item.Status 'leader'))
+    (array 'consul-server-card--voter' (and (not @item.ReadReplica) (eq @item.Status 'voter')))
+    (array 'consul-server-card--non-voter' (or @item.ReadReplica (includes @item.Status (array 'non-voter' 'staging'))))
   }}
   ...attributes
 >
-  <dl>
+  <a href={{@href}} class="consul-server-card__link" data-test-server-link>
 
-    <dt
-      {{tooltip "Leader"}}
-      class="name"
-    >
-    </dt>
-    <dd>
-      {{@item.Name}}
-    </dd>
+    <div class="consul-server-card__header">
+      {{#if (eq @item.Status 'leader')}}
+        <span class="consul-server-card__leader-tile" tabindex="-1" {{hds-tooltip "Leader" options=(detached-tooltip-options)}}>
+          <Hds::Icon @name="star-fill" @size="16" @color="var(--token-color-consul-brand)" />
+        </span>
+      {{/if}}
 
-    <dt class={{class-map
-      'health-status'
-      (array 'healthy' @item.Healthy)
-    }}>
-      Status
-    </dt>
-    <dd>
-      {{if (includes @item.Status (array 'leader' 'voter')) 'Active voter' 'Backup voter'}}
-    </dd>
+      <p class="consul-server-card__name">
+        {{@item.Name}}
+      </p>
+    </div>
 
-  </dl>
-</div>
+    <div class="consul-server-card__footer">
+      <span class="consul-server-card__role">
+        {{#if (or (eq @item.Status 'leader') (and (not @item.ReadReplica) (eq @item.Status 'voter')))}}
+          Active Voter
+        {{else}}
+          Backup Voter
+        {{/if}}
+      </span>
 
+      <Hds::Badge
+        @text={{if @item.Healthy "Healthy" "Unhealthy"}}
+        @icon={{if @item.Healthy "check" "x"}}
+        @color={{if @item.Healthy "success" "critical"}}
+        @type="filled"
+        @size="small"
+      />
+    </div>
+
+  </a>
+</Hds::Card::Container>

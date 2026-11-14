@@ -3,32 +3,19 @@
   "description": "Monorepo for Consul UI, packages and addons.",
   "license": "MPL-2.0",
   "author": "HashiCorp",
-  "workspaces": {
-    "packages": [
-      "packages/*"
-    ]
-  },
   "scripts": {
-    "doc:toc": "doctoc README.md",
     "compliance": "npm-run-all compliance:*",
-    "compliance:licenses": "license-checker --summary --onlyAllow 'Python-2.0;Apache*;Apache License, Version 2.0;Apache-2.0;Apache 2.0;Artistic-2.0;BSD;BSD-3-Clause;CC-BY-3.0;CC-BY-4.0;CC0-1.0;ISC;MIT;MPL-2.0;Public Domain;Unicode-TOU;Unlicense;WTFPL' --excludePackages 'consul-ui@2.2.0;consul-acls@0.1.0;consul-lock-sessions@0.1.0;consul-partitions@0.1.0;consul-nspaces@0.1.0;consul-peerings@0.1.0'"
-
+    "compliance:licenses": "license-checker --summary --onlyAllow 'Python-2.0;Apache*;Apache License, Version 2.0;Apache-2.0;Apache 2.0;Artistic-2.0;BSD;BSD-3-Clause;CC-BY-3.0;CC-BY-4.0;CC0-1.0;ISC;MIT;MPL-2.0;Public Domain;Unicode-TOU;Unlicense;WTFPL' --excludePackages 'consul-ui@2.2.0'",
+    "doc:toc": "doctoc README.md"
   },
   "devDependencies": {
     "doctoc": "^2.0.0",
     "license-checker": "^25.0.1",
     "npm-run-all": "^4.1.5"
   },
-  "resolutions": {
-    "xmlhttprequest-ssl": "^1.6.3",
-    "ember-basic-dropdown": "3.0.21",
-    "glob": "7.2.3",
-    "braces": "^3.0.0",
-    "markdown-it": "^12.3.2",
-    "codemirror": "5.58.2",
-    "ansi-html": "0.0.8"
-  },
+  "packageManager": "pnpm@10.16.1+sha512.0e155aa2629db8672b49e8475da6226aa4bdea85fdcdfdc15350874946d4f3c91faaf64cbdc4a5d1ab8002f473d5c3fcedcd197989cf0390f9badd3c04678706",
   "engines": {
-    "node": "18"
+    "node": "24",
+    "pnpm": ">= 9"
   }
 }

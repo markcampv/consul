@@ -1,4 +1,4 @@
-# Copyright (c) HashiCorp, Inc.
+# Copyright IBM Corp. 2024, 2026
 # SPDX-License-Identifier: BUSL-1.1
 
 acl_agent_master_token = "furuQD0b"
@@ -281,6 +281,7 @@ enable_central_service_config = false
 enable_debug = true
 enable_script_checks = true
 enable_local_script_checks = true
+disable_kv_key_validation = false
 enable_syslog = true
 encrypt = "A4wELWqH"
 encrypt_verify_incoming = true
@@ -303,12 +304,15 @@ leave_on_terminate = true
 license_path = "/path/to/license.lic"
 limits {
     http_max_conns_per_client = 100
+    http_max_request_body_size = 512
+    grpc_max_conns_per_client = 2953
     https_handshake_timeout = "2391ms"
     rpc_handshake_timeout = "1932ms"
     rpc_client_timeout = "62s"
     rpc_rate = 12029.43
     rpc_max_burst = 44848
     rpc_max_conns_per_client = 2954
+    rpc_max_header_bytes = 8192
     kv_max_value_size = 1234567800
     txn_max_req_len = 567800000
     request_limits {
@@ -683,6 +687,26 @@ services = [
                 "1CuJHVfw" = "Kzqsa7yc"
             }
         }
+    },
+    {
+        id = "AI1d2xY4"
+        name = "discovery-multi-port"
+        tags = ["0Zwg8l6v", "zebELdN5"]
+        address = "9RhAPlPB"
+        token = "myjKJkWH"
+        ports = [
+            {
+                name = "http"
+                port = 8080
+                default = true
+            },
+            {
+                name = "admin"
+                port = 9090
+                default = false
+            }
+        ]
+        enable_tag_override = true
     }
 ]
 session_ttl_min = "26627s"
@@ -720,6 +744,13 @@ telemetry {
     statsd_address = "drce87cy"
     statsite_address = "HpFwKB8R"
     disable_per_tenancy_usage_metrics = true
+    certificate {
+        enabled = true
+        cache_duration = "5m"
+        critical_threshold_days = 7
+        warning_threshold_days = 30
+        info_threshold_days = 90
+    }
 }
 tls {
     defaults {

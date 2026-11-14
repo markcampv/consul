@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package consul
@@ -28,6 +28,12 @@ func (s *Server) SetSystemMetadataKey(key, val string) error {
 	// TODO(rpc-metrics-improv): Double check request name here
 	_, err := s.leaderRaftApply("SystemMetadata.Upsert", structs.SystemMetadataRequestType, args)
 
+	return err
+}
+
+func (s *Server) ApplyCensusRequest(req *structs.CensusRequest) error {
+	// TODO(rpc-metrics-improv): dedicated metrics label for reporting/manual snapshot operations
+	_, err := s.leaderRaftApply("Reporting.Census", structs.CensusRequestType, req)
 	return err
 }
 

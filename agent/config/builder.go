@@ -1,10 +1,9 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package config
 
 import (
-	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -21,11 +20,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/armon/go-metrics/prometheus"
 	"golang.org/x/time/rate"
 
 	"github.com/hashicorp/go-bexpr"
 	"github.com/hashicorp/go-hclog"
+	"github.com/hashicorp/go-metrics/prometheus"
 	"github.com/hashicorp/go-multierror"
 	"github.com/hashicorp/go-sockaddr/template"
 	"github.com/hashicorp/memberlist"
@@ -36,7 +35,8 @@ import (
 	"github.com/hashicorp/consul/agent/consul"
 	"github.com/hashicorp/consul/agent/consul/authmethod/ssoauth"
 	consulrate "github.com/hashicorp/consul/agent/consul/rate"
-	hcpconfig "github.com/hashicorp/consul/agent/hcp/config"
+	"github.com/hashicorp/consul/agent/consul/state"
+	"github.com/hashicorp/consul/agent/featuregate"
 	"github.com/hashicorp/consul/agent/rpc/middleware"
 	"github.com/hashicorp/consul/agent/structs"
 	"github.com/hashicorp/consul/agent/token"
@@ -324,6 +324,54 @@ func (a byName) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
 
 func (a byName) Less(i, j int) bool { return a[i].Name() < a[j].Name() }
 
+// getCertificateEnabled returns the certificate telemetry enabled flag with default true
+func (b *builder) getCertificateEnabled(cert *CertificateTelemetry) bool {
+	if cert == nil {
+		return true
+	}
+	return boolValWithDefault(cert.Enabled, true)
+}
+
+// getCertificateCacheDuration returns the certificate telemetry cache duration with default 5m
+func (b *builder) getCertificateCacheDuration(cert *CertificateTelemetry) time.Duration {
+	if cert == nil {
+		return 5 * time.Minute
+	}
+	return b.durationValWithDefault("telemetry.certificate.cache_duration", cert.CacheDuration, 5*time.Minute)
+}
+
+// getCertificateCriticalThresholdDays returns the certificate critical threshold with default 7
+func (b *builder) getCertificateCriticalThresholdDays(cert *CertificateTelemetry) int {
+	if cert == nil {
+		return 7
+	}
+	return intValWithDefault(cert.CriticalThresholdDays, 7)
+}
+
+// getCertificateWarningThresholdDays returns the certificate warning threshold with default 30
+func (b *builder) getCertificateWarningThresholdDays(cert *CertificateTelemetry) int {
+	if cert == nil {
+		return 30
+	}
+	return intValWithDefault(cert.WarningThresholdDays, 30)
+}
+
+// getCertificateInfoThresholdDays returns the certificate info threshold with default 90
+func (b *builder) getCertificateInfoThresholdDays(cert *CertificateTelemetry) int {
+	if cert == nil {
+		return 90
+	}
+	return intValWithDefault(cert.InfoThresholdDays, 90)
+}
+
+// getCertificateExcludeAutoRenewable returns the certificate exclude auto-renewable flag with default false
+func (b *builder) getCertificateExcludeAutoRenewable(cert *CertificateTelemetry) bool {
+	if cert == nil {
+		return false
+	}
+	return boolValWithDefault(cert.ExcludeAutoRenewable, false)
+}
+
 // build constructs the runtime configuration from the config sources
 // and the command line flags. The config sources are processed in the
 // order they were added with the flags being processed last to give
@@ -492,6 +540,9 @@ func (b *builder) build() (rt RuntimeConfig, err error) {
 	// server can be reached.
 
 	bindAddrs := b.expandAddrs("bind_addr", c.BindAddr)
+	if b.err != nil {
+		return RuntimeConfig{}, b.err
+	}
 	if len(bindAddrs) == 0 {
 		return RuntimeConfig{}, fmt.Errorf("bind_addr cannot be empty")
 	}
@@ -688,18 +739,27 @@ func (b *builder) build() (rt RuntimeConfig, err error) {
 	connectEnabled := boolVal(c.Connect.Enabled)
 	connectCAProvider := stringVal(c.Connect.CAProvider)
 	connectCAConfig := c.Connect.CAConfig
+	connectVirtualIPCIDRv4 := state.DefaultVirtualIPv4CIDR
+	if cidr := stringVal(c.Connect.VirtualIPCIDRv4); cidr != "" {
+		connectVirtualIPCIDRv4 = cidr
+	}
+	connectVirtualIPCIDRv6 := state.DefaultVirtualIPv6CIDR
+	if cidr := stringVal(c.Connect.VirtualIPCIDRv6); cidr != "" {
+		connectVirtualIPCIDRv6 = cidr
+	}
+	if err := state.ValidateVirtualIPCIDRs(connectVirtualIPCIDRv4, connectVirtualIPCIDRv6); err != nil {
+		return RuntimeConfig{}, err
+	}
 
 	// autoEncrypt and autoConfig implicitly turns on connect which is why
 	// they need to be above other settings that rely on connect.
 	autoEncryptDNSSAN := []string{}
-	for _, d := range c.AutoEncrypt.DNSSAN {
-		autoEncryptDNSSAN = append(autoEncryptDNSSAN, d)
-	}
+	autoEncryptDNSSAN = append(autoEncryptDNSSAN, c.AutoEncrypt.DNSSAN...)
 	autoEncryptIPSAN := []net.IP{}
 	for _, i := range c.AutoEncrypt.IPSAN {
 		ip := net.ParseIP(i)
 		if ip == nil {
-			b.warn(fmt.Sprintf("Cannot parse ip %q from AutoEncrypt.IPSAN", i))
+			b.warn("Cannot parse ip %q from AutoEncrypt.IPSAN", i)
 			continue
 		}
 		autoEncryptIPSAN = append(autoEncryptIPSAN, ip)
@@ -782,6 +842,11 @@ func (b *builder) build() (rt RuntimeConfig, err error) {
 			if err := entry.Validate(); err != nil {
 				return RuntimeConfig{}, fmt.Errorf("config_entries.bootstrap[%d]: %w", i, err)
 			}
+			if warnEntry, ok := entry.(structs.WarningConfigEntry); ok {
+				for _, w := range warnEntry.Warnings() {
+					b.warn("config_entries.bootstrap[%d]: %s", i, w)
+				}
+			}
 			configEntries = append(configEntries, entry)
 		}
 	}
@@ -821,6 +886,8 @@ func (b *builder) build() (rt RuntimeConfig, err error) {
 	// build runtime config
 	//
 	dataDir := stringVal(c.DataDir)
+	tokenDirs := stringVal(c.TokenDirs)
+
 	rt = RuntimeConfig{
 		// non-user configurable values
 		AEInterval:                 b.durationVal("ae_interval", c.AEInterval),
@@ -834,17 +901,19 @@ func (b *builder) build() (rt RuntimeConfig, err error) {
 		VersionPrerelease:          stringVal(c.VersionPrerelease),
 		VersionMetadata:            stringVal(c.VersionMetadata),
 		Experiments:                c.Experiments,
+		FeatureGatesBootstrap:      c.FeatureGates.Bootstrap,
 		// What is a sensible default for BuildDate?
 		BuildDate: timeValWithDefault(c.BuildDate, time.Date(1970, 1, 00, 00, 00, 01, 0, time.UTC)),
 
 		// consul configuration
-		ConsulCoordinateUpdateBatchSize:  intVal(c.Consul.Coordinate.UpdateBatchSize),
-		ConsulCoordinateUpdateMaxBatches: intVal(c.Consul.Coordinate.UpdateMaxBatches),
-		ConsulCoordinateUpdatePeriod:     b.durationVal("consul.coordinate.update_period", c.Consul.Coordinate.UpdatePeriod),
-		ConsulRaftElectionTimeout:        consulRaftElectionTimeout,
-		ConsulRaftHeartbeatTimeout:       consulRaftHeartbeatTimeout,
-		ConsulRaftLeaderLeaseTimeout:     consulRaftLeaderLeaseTimeout,
-		ConsulServerHealthInterval:       b.durationVal("consul.server.health_interval", c.Consul.Server.HealthInterval),
+		ConsulCoordinateUpdateBatchSize:        intVal(c.Consul.Coordinate.UpdateBatchSize),
+		ConsulCoordinateUpdateMaxBatches:       intVal(c.Consul.Coordinate.UpdateMaxBatches),
+		ConsulCoordinateUpdatePeriod:           b.durationVal("consul.coordinate.update_period", c.Consul.Coordinate.UpdatePeriod),
+		ConsulRaftElectionTimeout:              consulRaftElectionTimeout,
+		ConsulRaftHeartbeatTimeout:             consulRaftHeartbeatTimeout,
+		ConsulRaftLeaderLeaseTimeout:           consulRaftLeaderLeaseTimeout,
+		ConsulServerHealthInterval:             b.durationVal("consul.server.health_interval", c.Consul.Server.HealthInterval),
+		FederationStateAntiEntropySyncInterval: b.durationVal("federation_state_anti_entropy_sync_interval", c.FederationStateAntiEntropySyncInterval),
 
 		// gossip configuration
 		GossipLANGossipInterval: b.durationVal("gossip_lan..gossip_interval", c.GossipLAN.GossipInterval),
@@ -923,15 +992,20 @@ func (b *builder) build() (rt RuntimeConfig, err error) {
 		DNSCacheMaxAge:        b.durationVal("dns_config.cache_max_age", c.DNS.CacheMaxAge),
 
 		// HTTP
-		HTTPPort:            httpPort,
-		HTTPSPort:           httpsPort,
-		HTTPAddrs:           httpAddrs,
-		HTTPSAddrs:          httpsAddrs,
-		HTTPBlockEndpoints:  c.HTTPConfig.BlockEndpoints,
-		HTTPMaxHeaderBytes:  intVal(c.HTTPConfig.MaxHeaderBytes),
-		HTTPResponseHeaders: c.HTTPConfig.ResponseHeaders,
-		AllowWriteHTTPFrom:  b.cidrsVal("allow_write_http_from", c.HTTPConfig.AllowWriteHTTPFrom),
-		HTTPUseCache:        boolValWithDefault(c.HTTPConfig.UseCache, true),
+		HTTPPort:               httpPort,
+		HTTPSPort:              httpsPort,
+		HTTPAddrs:              httpAddrs,
+		HTTPSAddrs:             httpsAddrs,
+		HTTPBlockEndpoints:     c.HTTPConfig.BlockEndpoints,
+		HTTPMaxHeaderBytes:     intVal(c.HTTPConfig.MaxHeaderBytes),
+		HTTPMaxRequestBodySize: int64ValWithDefault(c.Limits.HTTPMaxRequestBodySize, DefaultHTTPMaxRequestBodySize),
+		HTTPResponseHeaders:    c.HTTPConfig.ResponseHeaders,
+		AllowWriteHTTPFrom:     b.cidrsVal("allow_write_http_from", c.HTTPConfig.AllowWriteHTTPFrom),
+		HTTPUseCache:           boolValWithDefault(c.HTTPConfig.UseCache, true),
+		HTTPReadTimeout:        b.durationValWithDefaultMin("http_config.read_timeout", c.HTTPConfig.ReadTimeout, 15*time.Minute, 1*time.Second),
+		HTTPReadHeaderTimeout:  b.durationValWithDefaultMin("http_config.read_header_timeout", c.HTTPConfig.ReadHeaderTimeout, 10*time.Second, 1*time.Second),
+		HTTPWriteTimeout:       b.durationValWithDefaultMin("http_config.write_timeout", c.HTTPConfig.WriteTimeout, 15*time.Minute, 1*time.Second),
+		HTTPIdleTimeout:        b.durationValWithDefaultMin("http_config.idle_timeout", c.HTTPConfig.IdleTimeout, 120*time.Second, 10*time.Second),
 
 		// Telemetry
 		Telemetry: lib.TelemetryConfig{
@@ -963,6 +1037,12 @@ func (b *builder) build() (rt RuntimeConfig, err error) {
 				Expiration: b.durationVal("prometheus_retention_time", c.Telemetry.PrometheusRetentionTime),
 				Name:       stringVal(c.Telemetry.MetricsPrefix),
 			},
+			CertificateEnabled:               b.getCertificateEnabled(c.Telemetry.Certificate),
+			CertificateCacheDuration:         b.getCertificateCacheDuration(c.Telemetry.Certificate),
+			CertificateCriticalThresholdDays: b.getCertificateCriticalThresholdDays(c.Telemetry.Certificate),
+			CertificateWarningThresholdDays:  b.getCertificateWarningThresholdDays(c.Telemetry.Certificate),
+			CertificateInfoThresholdDays:     b.getCertificateInfoThresholdDays(c.Telemetry.Certificate),
+			CertificateExcludeAutoRenewable:  b.getCertificateExcludeAutoRenewable(c.Telemetry.Certificate),
 		},
 
 		// Agent
@@ -991,17 +1071,19 @@ func (b *builder) build() (rt RuntimeConfig, err error) {
 		AutoEncryptIPSAN:                       autoEncryptIPSAN,
 		AutoEncryptAllowTLS:                    autoEncryptAllowTLS,
 		AutoConfig:                             autoConfig,
-		Cloud:                                  b.cloudConfigVal(c),
 		ConnectEnabled:                         connectEnabled,
 		ConnectCAProvider:                      connectCAProvider,
 		ConnectCAConfig:                        connectCAConfig,
 		ConnectMeshGatewayWANFederationEnabled: connectMeshGatewayWANFederationEnabled,
 		ConnectSidecarMinPort:                  sidecarMinPort,
 		ConnectSidecarMaxPort:                  sidecarMaxPort,
+		ConnectVirtualIPCIDRv4:                 connectVirtualIPCIDRv4,
+		ConnectVirtualIPCIDRv6:                 connectVirtualIPCIDRv6,
 		ConnectTestCALeafRootChangeSpread:      b.durationVal("connect.test_ca_leaf_root_change_spread", c.Connect.TestCALeafRootChangeSpread),
 		ExposeMinPort:                          exposeMinPort,
 		ExposeMaxPort:                          exposeMaxPort,
 		DataDir:                                dataDir,
+		TokenDirs:                              tokenDirs,
 		Datacenter:                             datacenter,
 		DefaultQueryTime:                       b.durationVal("default_query_time", c.DefaultQueryTime),
 		DefaultIntentionPolicy:                 stringVal(c.DefaultIntentionPolicy),
@@ -1019,6 +1101,7 @@ func (b *builder) build() (rt RuntimeConfig, err error) {
 		EnableAgentTLSForChecks:    boolVal(c.EnableAgentTLSForChecks),
 		EnableCentralServiceConfig: boolVal(c.EnableCentralServiceConfig),
 		EnableDebug:                boolVal(c.EnableDebug),
+		DisableKVKeyValidation:     boolVal(c.DisableKVKeyValidation),
 		EnableRemoteScriptChecks:   enableRemoteScriptChecks,
 		EnableLocalScriptChecks:    enableLocalScriptChecks,
 		EncryptKey:                 stringVal(c.EncryptKey),
@@ -1030,6 +1113,7 @@ func (b *builder) build() (rt RuntimeConfig, err error) {
 		GRPCKeepaliveTimeout:       b.durationValWithDefaultMin("performance.grpc_keepalive_timeout", c.Performance.GRPCKeepaliveTimeout, 20*time.Second, time.Second),
 		HTTPMaxConnsPerClient:      intVal(c.Limits.HTTPMaxConnsPerClient),
 		HTTPSHandshakeTimeout:      b.durationVal("limits.https_handshake_timeout", c.Limits.HTTPSHandshakeTimeout),
+		GRPCMaxConnsPerClient:      intVal(c.Limits.GRPCMaxConnsPerClient),
 		KVMaxValueSize:             uint64Val(c.Limits.KVMaxValueSize),
 		LeaveDrainTime:             b.durationVal("performance.leave_drain_time", c.Performance.LeaveDrainTime),
 		LeaveOnTerm:                leaveOnTerm,
@@ -1067,6 +1151,7 @@ func (b *builder) build() (rt RuntimeConfig, err error) {
 		RPCClientTimeout:                  b.durationVal("limits.rpc_client_timeout", c.Limits.RPCClientTimeout),
 		RPCMaxBurst:                       intVal(c.Limits.RPCMaxBurst),
 		RPCMaxConnsPerClient:              intVal(c.Limits.RPCMaxConnsPerClient),
+		RPCMaxHeaderBytes:                 intVal(c.Limits.RPCMaxHeaderBytes),
 		RPCProtocol:                       intVal(c.RPCProtocol),
 		RPCRateLimit:                      limitVal(c.Limits.RPCRate),
 		RPCConfig:                         consul.RPCConfig{EnableStreaming: boolValWithDefault(c.RPC.EnableStreaming, serverMode)},
@@ -1119,8 +1204,7 @@ func (b *builder) build() (rt RuntimeConfig, err error) {
 		LocalProxyConfigResyncInterval:    30 * time.Second,
 	}
 
-	// host metrics are enabled if consul is configured with HashiCorp Cloud Platform integration
-	rt.Telemetry.EnableHostMetrics = boolValWithDefault(c.Telemetry.EnableHostMetrics, rt.IsCloudEnabled())
+	rt.Telemetry.EnableHostMetrics = boolValWithDefault(c.Telemetry.EnableHostMetrics, false)
 
 	rt.TLS, err = b.buildTLSConfig(rt, c.TLS)
 	if err != nil {
@@ -1144,6 +1228,9 @@ func (b *builder) build() (rt RuntimeConfig, err error) {
 	}
 	if rt.Cache.EntryFetchRate <= 0 {
 		return RuntimeConfig{}, fmt.Errorf("cache.entry_fetch_rate must be strictly positive, was: %v", rt.Cache.EntryFetchRate)
+	}
+	if rt.HTTPMaxRequestBodySize <= 0 {
+		return RuntimeConfig{}, fmt.Errorf("limits.http_max_request_body_size must be strictly positive, was: %v", rt.HTTPMaxRequestBodySize)
 	}
 
 	if rt.UIConfig.MetricsProvider == "prometheus" {
@@ -1257,7 +1344,7 @@ func (b *builder) validate(rt RuntimeConfig) error {
 	}
 	if rt.UIConfig.MetricsProxy.BaseURL != "" {
 		u, err := url.Parse(rt.UIConfig.MetricsProxy.BaseURL)
-		if err != nil || !(u.Scheme == "http" || u.Scheme == "https") {
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 			return fmt.Errorf("ui_config.metrics_proxy.base_url must be a valid http"+
 				" or https URL. received: %q",
 				rt.UIConfig.MetricsProxy.BaseURL)
@@ -1273,7 +1360,7 @@ func (b *builder) validate(rt RuntimeConfig) error {
 			return err
 		}
 		u, err := url.Parse(v)
-		if err != nil || !(u.Scheme == "http" || u.Scheme == "https") {
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 			return fmt.Errorf("ui_config.dashboard_url_templates values must be a"+
 				" valid http or https URL. received: %q",
 				rt.UIConfig.MetricsProxy.BaseURL)
@@ -1287,6 +1374,27 @@ func (b *builder) validate(rt RuntimeConfig) error {
 			return fmt.Errorf("Error getting info on data_dir: %s", err)
 		case err == nil && !fi.IsDir():
 			return fmt.Errorf("data_dir %q is not a directory", rt.DataDir)
+		}
+	}
+
+	if !rt.DevMode {
+		if rt.TokenDirs != "" {
+			// TokenDirs supports a comma-separated list of directories (matching
+			// the runtime split performed by the Vault auth modules). Validate
+			// each entry individually.
+			for _, dir := range strings.Split(rt.TokenDirs, ",") {
+				dir = strings.TrimSpace(dir)
+				if dir == "" {
+					continue
+				}
+				fi, err := os.Stat(dir)
+				switch {
+				case err != nil && !os.IsNotExist(err):
+					return fmt.Errorf("Error getting info on token_dirs: %s", err)
+				case err == nil && !fi.IsDir():
+					return fmt.Errorf("token_dirs %q is not a directory", dir)
+				}
+			}
 		}
 	}
 
@@ -1356,6 +1464,14 @@ func (b *builder) validate(rt RuntimeConfig) error {
 	}
 	if rt.AutopilotMaxTrailingLogs < 0 {
 		return fmt.Errorf("autopilot.max_trailing_logs cannot be %d. Must be greater than or equal to zero", rt.AutopilotMaxTrailingLogs)
+	}
+	if len(rt.FeatureGatesBootstrap) > 0 && !rt.ServerMode {
+		return fmt.Errorf("feature_gates.bootstrap requires server = true")
+	}
+	for name := range rt.FeatureGatesBootstrap {
+		if _, ok := featuregate.DefaultRegistry().DefinitionForName(name); !ok {
+			return fmt.Errorf("feature_gates.bootstrap contains unknown feature %q", name)
+		}
 	}
 	if err := validateBasicName("primary_datacenter", rt.PrimaryDatacenter, true); err != nil {
 		return err
@@ -1466,6 +1582,12 @@ func (b *builder) validate(rt RuntimeConfig) error {
 		if err := s.Validate(); err != nil {
 			return fmt.Errorf("service %q: %s", s.Name, err)
 		}
+
+		for _, portInfo := range s.Ports {
+			if dnsutil.InvalidNameRe.MatchString(portInfo.Name) {
+				b.warn("Service %q port name %q will not be discoverable via DNS due to invalid characters. Valid characters include all alpha-numerics and dashes.", s.Name, portInfo.Name)
+			}
+		}
 	}
 	// Check for errors in the node check definitions
 	for _, c := range rt.Checks {
@@ -1547,6 +1669,10 @@ func (b *builder) validate(rt RuntimeConfig) error {
 		return err
 	}
 
+	if err := checkLimitsFromMaxConnsPerClient(rt.GRPCMaxConnsPerClient); err != nil {
+		return err
+	}
+
 	if rt.AutoConfig.Enabled && rt.AutoEncryptTLS {
 		return fmt.Errorf("both auto_encrypt.tls and auto_config.enabled cannot be set to true.")
 	}
@@ -1557,7 +1683,7 @@ func (b *builder) validate(rt RuntimeConfig) error {
 
 	if err := validateRemoteScriptsChecks(rt); err != nil {
 		// TODO: make this an error in a future version
-		b.warn(err.Error())
+		b.warn("%s", err.Error())
 	}
 
 	err := b.validateEnterpriseConfig(rt)
@@ -1656,7 +1782,7 @@ func (b *builder) checkVal(v *CheckDefinition) *structs.CheckDefinition {
 		OSService:                      stringVal(v.OSService),
 		DeregisterCriticalServiceAfter: b.durationVal(fmt.Sprintf("check[%s].deregister_critical_service_after", id), v.DeregisterCriticalServiceAfter),
 		OutputMaxSize:                  intValWithDefault(v.OutputMaxSize, checks.DefaultBufSize),
-		EnterpriseMeta:                 v.EnterpriseMeta.ToStructs(),
+		EnterpriseMeta:                 v.ToStructs(),
 	}
 }
 
@@ -1730,6 +1856,7 @@ func (b *builder) serviceVal(v *ServiceDefinition) *structs.ServiceDefinition {
 		TaggedAddresses:   b.svcTaggedAddresses(v.TaggedAddresses),
 		Meta:              meta,
 		Port:              intVal(v.Port),
+		Ports:             b.portsVal(v.Ports),
 		SocketPath:        stringVal(v.SocketPath),
 		Token:             stringVal(v.Token),
 		EnableTagOverride: boolVal(v.EnableTagOverride),
@@ -1738,8 +1865,73 @@ func (b *builder) serviceVal(v *ServiceDefinition) *structs.ServiceDefinition {
 		Proxy:             b.serviceProxyVal(v.Proxy),
 		Connect:           b.serviceConnectVal(v.Connect),
 		Locality:          b.serviceLocalityVal(v.Locality),
-		EnterpriseMeta:    v.EnterpriseMeta.ToStructs(),
+		AI:                b.serviceAIVal(v.AI),
+		EnterpriseMeta:    v.ToStructs(),
 	}
+}
+
+func (b *builder) serviceAIVal(v *ServiceAI) *structs.ServiceAI {
+	if v == nil {
+		return nil
+	}
+	ai := &structs.ServiceAI{
+		Role: structs.ServiceAIRole(stringVal(v.Role)),
+	}
+	if v.InferenceModel != nil {
+		im := &structs.AIInferenceModel{
+			Protocol: stringVal(v.InferenceModel.Protocol),
+			Path:     stringVal(v.InferenceModel.Path),
+		}
+		if v.InferenceModel.Defaults != nil {
+			im.Defaults = &structs.AIModelDefaults{
+				MaxTokens:   intVal(v.InferenceModel.Defaults.MaxTokens),
+				Temperature: float64Val(v.InferenceModel.Defaults.Temperature),
+			}
+		}
+		ai.InferenceModel = im
+	}
+	if v.MCPServer != nil {
+		ms := &structs.AIMCPServer{
+			Transport:       stringVal(v.MCPServer.Transport),
+			Path:            stringVal(v.MCPServer.Path),
+			ProtocolVersion: stringVal(v.MCPServer.ProtocolVersion),
+		}
+		ai.MCPServer = ms
+	}
+	if v.Agent != nil {
+		ag := &structs.AIAgent{}
+		if v.Agent.Inference != nil {
+			ag.Inference = &structs.AIAgentInference{
+				Specialization: v.Agent.Inference.Specialization,
+				Vendor:         stringVal(v.Agent.Inference.Vendor),
+			}
+		}
+		if v.Agent.MCP != nil {
+			mcp := &structs.AIAgentMCP{
+				Port: intVal(v.Agent.MCP.Port),
+			}
+			if v.Agent.MCP.HITL != nil {
+				mcp.HITL = &structs.AIAgentMCPHITL{
+					Port:            intVal(v.Agent.MCP.HITL.Port),
+					ApprovalTimeout: stringVal(v.Agent.MCP.HITL.ApprovalTimeout),
+				}
+			}
+			ag.MCP = mcp
+		}
+		if v.Agent.RateLimits != nil {
+			ag.RateLimits = &structs.AIAgentRateLimits{
+				ToolCallsPerMinute: intVal(v.Agent.RateLimits.ToolCallsPerMinute),
+				ToolCallsPerHour:   intVal(v.Agent.RateLimits.ToolCallsPerHour),
+			}
+		}
+		if v.Agent.Interceptor != nil {
+			ag.Interceptor = &structs.AIAgentInterceptor{
+				Port: intVal(v.Agent.Interceptor.Port),
+			}
+		}
+		ai.Agent = ag
+	}
+	return ai
 }
 
 func (b *builder) serviceLocalityVal(l *Locality) *structs.Locality {
@@ -1750,6 +1942,19 @@ func (b *builder) serviceLocalityVal(l *Locality) *structs.Locality {
 		Region: stringVal(l.Region),
 		Zone:   stringVal(l.Zone),
 	}
+}
+
+func (b *builder) portsVal(ports ServicePorts) structs.ServicePorts {
+	var servicePorts structs.ServicePorts
+	for _, port := range ports {
+		servicePorts = append(servicePorts, structs.ServicePort{
+			Name:    stringVal(port.Name),
+			Port:    intVal(port.Port),
+			Default: boolVal(port.Default),
+		})
+	}
+
+	return servicePorts
 }
 
 func (b *builder) serviceKindVal(v *string) structs.ServiceKind {
@@ -1767,6 +1972,8 @@ func (b *builder) serviceKindVal(v *string) structs.ServiceKind {
 		return structs.ServiceKindIngressGateway
 	case string(structs.ServiceKindAPIGateway):
 		return structs.ServiceKindAPIGateway
+	case string(structs.ServiceKindInferenceGateway):
+		return structs.ServiceKindInferenceGateway
 	default:
 		return structs.ServiceKindTypical
 	}
@@ -1801,6 +2008,7 @@ func (b *builder) upstreamsVal(v []Upstream) structs.Upstreams {
 			DestinationPartition: stringVal(u.DestinationPartition),
 			DestinationPeer:      stringVal(u.DestinationPeer),
 			DestinationName:      stringVal(u.DestinationName),
+			DestinationPort:      stringVal(u.DestinationPort),
 			Datacenter:           stringVal(u.Datacenter),
 			LocalBindAddress:     stringVal(u.LocalBindAddress),
 			LocalBindPort:        intVal(u.LocalBindPort),
@@ -1943,7 +2151,6 @@ func (b *builder) uiConfigVal(v RawUIConfig) UIConfig {
 		MetricsProviderOptionsJSON: stringVal(v.MetricsProviderOptionsJSON),
 		MetricsProxy:               b.uiMetricsProxyVal(v.MetricsProxy),
 		DashboardURLTemplates:      v.DashboardURLTemplates,
-		HCPEnabled:                 os.Getenv("CONSUL_HCP_ENABLED") == "true",
 	}
 }
 
@@ -2027,6 +2234,13 @@ func uintVal(v *uint) uint {
 func uint64Val(v *uint64) uint64 {
 	if v == nil {
 		return 0
+	}
+	return *v
+}
+
+func int64ValWithDefault(v *int64, defaultVal int64) int64 {
+	if v == nil {
+		return defaultVal
 	}
 	return *v
 }
@@ -2172,6 +2386,37 @@ func (b *builder) tlsCipherSuites(name string, v *string, tlsMinVersion types.TL
 	if err != nil {
 		b.err = multierror.Append(b.err, fmt.Errorf("%s: invalid TLS cipher suites: %s", name, err))
 		return []types.TLSCipherSuite{}
+	}
+	return a
+}
+
+// tlsECDHCurves parses ECDH curves from a comma-separated string into a
+// recognized slice
+func (b *builder) tlsECDHCurves(name string, v *string, tlsMinVersion types.TLSVersion) []types.TLSECDHCurve {
+	if v == nil {
+		return nil
+	}
+
+	if err := types.ValidateTLSVersionECDHCurvesCompat(tlsMinVersion); err != nil {
+		b.err = multierror.Append(b.err, fmt.Errorf("%s: %s", name, err))
+		return nil
+	}
+
+	*v = strings.TrimSpace(*v)
+	if *v == "" {
+		return []types.TLSECDHCurve{}
+	}
+	curveStrings := strings.Split(*v, ",")
+
+	a := make([]types.TLSECDHCurve, len(curveStrings))
+	for i, curve := range curveStrings {
+		a[i] = types.TLSECDHCurve(strings.TrimSpace(curve))
+	}
+
+	err := types.ValidateConsulAgentECDHCurves(a)
+	if err != nil {
+		b.err = multierror.Append(b.err, fmt.Errorf("%s: invalid TLS curves: %s", name, err))
+		return []types.TLSECDHCurve{}
 	}
 	return a
 }
@@ -2428,7 +2673,7 @@ func (b *builder) autoConfigVal(raw AutoConfigRaw, agentPartition string) AutoCo
 	for _, i := range raw.IPSANs {
 		ip := net.ParseIP(i)
 		if ip == nil {
-			b.warn(fmt.Sprintf("Cannot parse ip %q from auto_config.ip_sans", i))
+			b.warn("Cannot parse ip %q from auto_config.ip_sans", i)
 			continue
 		}
 		val.IPSANs = append(val.IPSANs, ip)
@@ -2574,75 +2819,6 @@ func validateAutoConfigAuthorizer(rt RuntimeConfig) error {
 	return nil
 }
 
-func (b *builder) cloudConfigVal(v Config) hcpconfig.CloudConfig {
-	// Load the same environment variables expected by hcp-sdk-go
-	envHostname, ok := os.LookupEnv("HCP_API_ADDRESS")
-	if !ok {
-		if legacyEnvHostname, ok := os.LookupEnv("HCP_API_HOST"); ok {
-			// Remove only https scheme prefixes from the deprecated environment
-			// variable for specifying the API host. Mirrors the same behavior as
-			// hcp-sdk-go.
-			if strings.HasPrefix(strings.ToLower(legacyEnvHostname), "https://") {
-				legacyEnvHostname = legacyEnvHostname[8:]
-			}
-			envHostname = legacyEnvHostname
-		}
-	}
-
-	var envTLSConfig *tls.Config
-	if os.Getenv("HCP_AUTH_TLS") == "insecure" ||
-		os.Getenv("HCP_SCADA_TLS") == "insecure" ||
-		os.Getenv("HCP_API_TLS") == "insecure" {
-		envTLSConfig = &tls.Config{InsecureSkipVerify: true}
-	}
-
-	val := hcpconfig.CloudConfig{
-		ResourceID:   os.Getenv("HCP_RESOURCE_ID"),
-		ClientID:     os.Getenv("HCP_CLIENT_ID"),
-		ClientSecret: os.Getenv("HCP_CLIENT_SECRET"),
-		AuthURL:      os.Getenv("HCP_AUTH_URL"),
-		Hostname:     envHostname,
-		ScadaAddress: os.Getenv("HCP_SCADA_ADDRESS"),
-		TLSConfig:    envTLSConfig,
-	}
-
-	// Node id might get overridden in setup.go:142
-	nodeID := stringVal(v.NodeID)
-	val.NodeID = types.NodeID(nodeID)
-	val.NodeName = b.nodeName(v.NodeName)
-
-	if v.Cloud == nil {
-		return val
-	}
-
-	// Load configuration file variables for anything not set by environment variables
-	if val.AuthURL == "" {
-		val.AuthURL = stringVal(v.Cloud.AuthURL)
-	}
-
-	if val.Hostname == "" {
-		val.Hostname = stringVal(v.Cloud.Hostname)
-	}
-
-	if val.ScadaAddress == "" {
-		val.ScadaAddress = stringVal(v.Cloud.ScadaAddress)
-	}
-
-	if val.ResourceID == "" {
-		val.ResourceID = stringVal(v.Cloud.ResourceID)
-	}
-
-	if val.ClientID == "" {
-		val.ClientID = stringVal(v.Cloud.ClientID)
-	}
-
-	if val.ClientSecret == "" {
-		val.ClientSecret = stringVal(v.Cloud.ClientSecret)
-	}
-
-	return val
-}
-
 // decodeBytes returns the encryption key decoded.
 func decodeBytes(key string) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(key)
@@ -2739,6 +2915,7 @@ func (b *builder) buildTLSConfig(rt RuntimeConfig, t TLS) (tlsutil.Config, error
 
 	defaultTLSMinVersion := b.tlsVersion("tls.defaults.tls_min_version", t.Defaults.TLSMinVersion)
 	defaultCipherSuites := b.tlsCipherSuites("tls.defaults.tls_cipher_suites", t.Defaults.TLSCipherSuites, defaultTLSMinVersion)
+	defaultECDHCurves := b.tlsECDHCurves("tls.defaults.tls_ecdh_curves", t.Defaults.TLSECDHCurves, defaultTLSMinVersion)
 
 	mapCommon := func(name string, src TLSProtocolConfig, dst *tlsutil.ProtocolConfig) {
 		dst.CAPath = stringValWithDefault(src.CAPath, stringVal(t.Defaults.CAPath))
@@ -2773,6 +2950,25 @@ func (b *builder) buildTLSConfig(rt RuntimeConfig, t TLS) (tlsutil.Config, error
 			dst.CipherSuites = b.tlsCipherSuites(
 				fmt.Sprintf("tls.%s.tls_cipher_suites", name),
 				src.TLSCipherSuites,
+				dst.TLSMinVersion,
+			)
+		}
+
+		if src.TLSECDHCurves == nil {
+			if len(defaultECDHCurves) > 0 {
+				if types.ValidateTLSVersionECDHCurvesCompat(dst.TLSMinVersion) == nil {
+					dst.ECDHCurves = defaultECDHCurves
+				}
+			} else {
+				// Automatic curve injection: keep behaviour same as connect mesh
+				if err, isLessThanTLS13 := dst.TLSMinVersion.LessThan(types.TLSv1_3); err == nil && !isLessThanTLS13 {
+					dst.ECDHCurves = append([]types.TLSECDHCurve(nil), types.DefaultConsulAgentPQCECDHCurves...)
+				}
+			}
+		} else {
+			dst.ECDHCurves = b.tlsECDHCurves(
+				fmt.Sprintf("tls.%s.tls_ecdh_curves", name),
+				src.TLSECDHCurves,
 				dst.TLSMinVersion,
 			)
 		}

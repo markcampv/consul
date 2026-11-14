@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -16,6 +16,7 @@ import token from 'consul-ui/filter/predicates/token';
 import policy from 'consul-ui/filter/predicates/policy';
 import authMethod from 'consul-ui/filter/predicates/auth-method';
 import peer from 'consul-ui/filter/predicates/peer';
+import session from 'consul-ui/filter/predicates/session';
 
 const predicates = {
   service: andOr(service),
@@ -28,6 +29,7 @@ const predicates = {
   token: andOr(token),
   policy: andOr(policy),
   peer: andOr(peer),
+  session: andOr(session),
 };
 
 export default class FilterService extends Service {

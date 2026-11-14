@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package consul
@@ -910,7 +910,7 @@ func TestTxn_Read_ACLDeny(t *testing.T) {
 		require.NoError(t, err)
 		require.Empty(t, out.Results)
 		require.Empty(t, out.Errors)
-		require.True(t, out.QueryMeta.ResultsFilteredByACLs, "ResultsFilteredByACLs should be true")
+		require.True(t, out.ResultsFilteredByACLs, "ResultsFilteredByACLs should be true")
 	})
 
 	t.Run("complex operations (return permission denied errors)", func(t *testing.T) {
@@ -1070,4 +1070,558 @@ func TestTxn_Validation(t *testing.T) {
 		require.Greater(t, len(out.Errors), 0)
 		require.Contains(t, out.Errors[0].Error(), tc.expectedError)
 	}
+}
+
+func TestTxn_Apply_ServiceSetRejectsServiceNameMismatchForExistingID(t *testing.T) {
+	if testing.Short() {
+		t.Skip("too slow for testing.Short")
+	}
+
+	t.Parallel()
+
+	dir1, s1 := testServerWithConfig(t, func(c *Config) {
+		c.PrimaryDatacenter = "dc1"
+		c.ACLsEnabled = true
+		c.ACLInitialManagementToken = "root"
+		c.ACLResolverSettings.ACLDefaultPolicy = "deny"
+	})
+	defer os.RemoveAll(dir1)
+	defer s1.Shutdown()
+
+	testrpc.WaitForLeader(t, s1.RPC, "dc1")
+
+	state := s1.fsm.State()
+	require.NoError(t, state.EnsureNode(1, &structs.Node{
+		Node:    "test-node",
+		Address: "127.0.0.1",
+	}))
+
+	require.NoError(t, state.EnsureService(2, "test-node", &structs.NodeService{
+		ID:      "shared-id",
+		Service: "victim-svc",
+		Address: "127.0.0.1",
+	}))
+
+	codec := rpcClient(t, s1)
+	defer codec.Close()
+
+	token := createTokenFull(t, codec, testTxnRules)
+
+	arg := structs.TxnRequest{
+		Datacenter: "dc1",
+		Ops: structs.TxnOps{
+			{
+				Service: &structs.TxnServiceOp{
+					Verb: api.ServiceSet,
+					Node: "test-node",
+					Service: structs.NodeService{
+						ID:      "shared-id",
+						Service: "test-svc",
+						Address: "127.0.0.1",
+					},
+				},
+			},
+		},
+		WriteRequest: structs.WriteRequest{
+			Token: token.SecretID,
+		},
+	}
+
+	var out structs.TxnResponse
+	require.NoError(t, s1.RPC(context.Background(), "Txn.Apply", &arg, &out))
+	require.Len(t, out.Errors, 1)
+	require.Equal(t, 0, out.Errors[0].OpIndex)
+	require.Contains(t, out.Errors[0].What, `does not match existing service name`)
+}
+
+func TestTxn_Apply_CheckSetAuthorizesResolvedServiceID(t *testing.T) {
+	if testing.Short() {
+		t.Skip("too slow for testing.Short")
+	}
+
+	t.Parallel()
+
+	dir1, s1 := testServerWithConfig(t, func(c *Config) {
+		c.PrimaryDatacenter = "dc1"
+		c.ACLsEnabled = true
+		c.ACLInitialManagementToken = "root"
+		c.ACLResolverSettings.ACLDefaultPolicy = "deny"
+	})
+	defer os.RemoveAll(dir1)
+	defer s1.Shutdown()
+
+	testrpc.WaitForLeader(t, s1.RPC, "dc1")
+
+	state := s1.fsm.State()
+	require.NoError(t, state.EnsureNode(1, &structs.Node{
+		Node:    "test-node",
+		Address: "127.0.0.1",
+	}))
+
+	require.NoError(t, state.EnsureService(2, "test-node", &structs.NodeService{
+		ID:      "victim-id",
+		Service: "victim-svc",
+		Address: "127.0.0.1",
+	}))
+
+	codec := rpcClient(t, s1)
+	defer codec.Close()
+
+	token := createTokenFull(t, codec, testTxnRules)
+
+	arg := structs.TxnRequest{
+		Datacenter: "dc1",
+		Ops: structs.TxnOps{
+			{
+				Check: &structs.TxnCheckOp{
+					Verb: api.CheckSet,
+					Check: structs.HealthCheck{
+						Node:        "test-node",
+						CheckID:     types.CheckID("victim-check"),
+						Name:        "victim-check",
+						ServiceID:   "victim-id",
+						ServiceName: "test-svc", // spoofed; must not be trusted
+					},
+				},
+			},
+		},
+		WriteRequest: structs.WriteRequest{
+			Token: token.SecretID,
+		},
+	}
+
+	var out structs.TxnResponse
+	require.NoError(t, s1.RPC(context.Background(), "Txn.Apply", &arg, &out))
+	require.Len(t, out.Errors, 1)
+	require.Equal(t, 0, out.Errors[0].OpIndex)
+	acl.RequirePermissionDeniedMessage(
+		t,
+		out.Errors[0].What,
+		token.AccessorID,
+		nil,
+		acl.ResourceService,
+		acl.AccessWrite,
+		"victim-svc",
+	)
+}
+
+// TestTxn_Apply_CheckSetSameTxnAsServiceSet is a regression test for a bug
+// where the transaction pre-check rejected a service-level check write whose
+// service was being created earlier in the same atomic transaction. The
+// pre-check looked the service up in committed FSM state, which does not yet
+// contain ops from the in-flight transaction, and returned an
+// "unknown service ID" error. This broke the supported
+// "register node + service + check in one transaction" workflow (covered by
+// api.TestAPI_ClientTxnWrite).
+func TestTxn_Apply_CheckSetSameTxnAsServiceSet(t *testing.T) {
+	if testing.Short() {
+		t.Skip("too slow for testing.Short")
+	}
+
+	t.Parallel()
+
+	dir1, s1 := testServerWithConfig(t, func(c *Config) {
+		c.PrimaryDatacenter = "dc1"
+		c.ACLsEnabled = true
+		c.ACLInitialManagementToken = "root"
+		c.ACLResolverSettings.ACLDefaultPolicy = "deny"
+	})
+	defer os.RemoveAll(dir1)
+	defer s1.Shutdown()
+
+	testrpc.WaitForLeader(t, s1.RPC, "dc1")
+
+	codec := rpcClient(t, s1)
+	defer codec.Close()
+
+	// testTxnRules grants node:write on "test-node" and service:write on
+	// "test-svc". The transaction creates the node, the service, and a
+	// service-level check that binds to the just-created service - all in
+	// one atomic request.
+	token := createTokenFull(t, codec, testTxnRules)
+
+	arg := structs.TxnRequest{
+		Datacenter: "dc1",
+		Ops: structs.TxnOps{
+			{
+				Node: &structs.TxnNodeOp{
+					Verb: api.NodeSet,
+					Node: structs.Node{
+						Node:    "test-node",
+						Address: "127.0.0.1",
+					},
+				},
+			},
+			{
+				Service: &structs.TxnServiceOp{
+					Verb: api.ServiceSet,
+					Node: "test-node",
+					Service: structs.NodeService{
+						ID:      "test-svc-id",
+						Service: "test-svc",
+						Address: "127.0.0.1",
+						Port:    8080,
+					},
+				},
+			},
+			{
+				Check: &structs.TxnCheckOp{
+					Verb: api.CheckSet,
+					Check: structs.HealthCheck{
+						Node:        "test-node",
+						CheckID:     types.CheckID("test-check"),
+						Name:        "test-check",
+						Status:      api.HealthPassing,
+						ServiceID:   "test-svc-id",
+						ServiceName: "test-svc",
+					},
+				},
+			},
+		},
+		WriteRequest: structs.WriteRequest{
+			Token: token.SecretID,
+		},
+	}
+
+	var out structs.TxnResponse
+	require.NoError(t, s1.RPC(context.Background(), "Txn.Apply", &arg, &out))
+	require.Empty(t, out.Errors, "transaction should succeed; got errors: %+v", out.Errors)
+	require.Len(t, out.Results, 3)
+
+	// Confirm the check is bound to the real service in state.
+	_, gotCheck, err := s1.fsm.State().NodeCheck("test-node", types.CheckID("test-check"), nil, "")
+	require.NoError(t, err)
+	require.NotNil(t, gotCheck)
+	require.Equal(t, "test-svc-id", gotCheck.ServiceID)
+	require.Equal(t, "test-svc", gotCheck.ServiceName)
+}
+
+// TestTxn_Apply_CheckSetUnknownServiceIDEmptyName verifies the safety guard
+// in vetCheckWrite: when a service-level check op references a ServiceID that
+// does not exist in committed state and is not being created in the same
+// transaction, and the caller omits ServiceName, the op is rejected. This
+// prevents the same-txn-create fallback from being used to bypass ACLs by
+// supplying an empty service name (which most authorizers do not match).
+func TestTxn_Apply_CheckSetUnknownServiceIDEmptyName(t *testing.T) {
+	if testing.Short() {
+		t.Skip("too slow for testing.Short")
+	}
+
+	t.Parallel()
+
+	dir1, s1 := testServerWithConfig(t, func(c *Config) {
+		c.PrimaryDatacenter = "dc1"
+		c.ACLsEnabled = true
+		c.ACLInitialManagementToken = "root"
+		c.ACLResolverSettings.ACLDefaultPolicy = "deny"
+	})
+	defer os.RemoveAll(dir1)
+	defer s1.Shutdown()
+
+	testrpc.WaitForLeader(t, s1.RPC, "dc1")
+
+	// Pre-create the node so the only failure point is the check op.
+	require.NoError(t, s1.fsm.State().EnsureNode(1, &structs.Node{
+		Node:    "test-node",
+		Address: "127.0.0.1",
+	}))
+
+	codec := rpcClient(t, s1)
+	defer codec.Close()
+
+	token := createTokenFull(t, codec, testTxnRules)
+
+	arg := structs.TxnRequest{
+		Datacenter: "dc1",
+		Ops: structs.TxnOps{
+			{
+				Check: &structs.TxnCheckOp{
+					Verb: api.CheckSet,
+					Check: structs.HealthCheck{
+						Node:    "test-node",
+						CheckID: types.CheckID("ghost-check"),
+						Name:    "ghost-check",
+						// Service-level check (ServiceID set) but the
+						// service does not exist and ServiceName is empty.
+						ServiceID:   "ghost-id",
+						ServiceName: "",
+					},
+				},
+			},
+		},
+		WriteRequest: structs.WriteRequest{
+			Token: token.SecretID,
+		},
+	}
+
+	var out structs.TxnResponse
+	require.NoError(t, s1.RPC(context.Background(), "Txn.Apply", &arg, &out))
+	require.Len(t, out.Errors, 1)
+	require.Equal(t, 0, out.Errors[0].OpIndex)
+	require.Contains(t, out.Errors[0].What, "unknown service ID")
+}
+func TestTxn_Apply_ServiceSet_NoTokenConsulNameDoesNotOverwriteExistingService(t *testing.T) {
+	if testing.Short() {
+		t.Skip("too slow for testing.Short")
+	}
+
+	t.Parallel()
+
+	dir1, s1 := testServerWithConfig(t, func(c *Config) {
+		c.PrimaryDatacenter = "dc1"
+		c.ACLsEnabled = true
+		c.ACLInitialManagementToken = "root"
+		c.ACLResolverSettings.ACLDefaultPolicy = "deny"
+	})
+	defer os.RemoveAll(dir1)
+	defer s1.Shutdown()
+
+	testrpc.WaitForLeader(t, s1.RPC, "dc1")
+
+	state := s1.fsm.State()
+	require.NoError(t, state.EnsureNode(1, &structs.Node{
+		Node:    "victim-node",
+		Address: "127.0.0.1",
+	}))
+
+	require.NoError(t, state.EnsureService(2, "victim-node", &structs.NodeService{
+		ID:      "victim-id",
+		Service: "victim-service",
+		Address: "127.0.0.1",
+		Port:    9000,
+	}))
+
+	arg := structs.TxnRequest{
+		Datacenter: "dc1",
+		Ops: structs.TxnOps{
+			{
+				Service: &structs.TxnServiceOp{
+					Verb: api.ServiceSet,
+					Node: "victim-node",
+					Service: structs.NodeService{
+						ID:      "victim-id",
+						Service: "consul",
+						Address: "198.51.100.7",
+						Port:    8443,
+					},
+				},
+			},
+		},
+		// Intentionally no token.
+	}
+
+	var txnResp structs.TxnResponse
+	require.NoError(t, s1.RPC(context.Background(), "Txn.Apply", &arg, &txnResp))
+	require.Len(t, txnResp.Errors, 1)
+	require.Contains(t, txnResp.Errors[0].What, "does not match existing service name")
+
+	_, svc, err := state.NodeService(nil, "victim-node", "victim-id", nil, "")
+	require.NoError(t, err)
+	require.NotNil(t, svc)
+	require.Equal(t, "victim-service", svc.Service)
+	require.Equal(t, "127.0.0.1", svc.Address)
+	require.Equal(t, 9000, svc.Port)
+}
+
+func TestTxn_Apply_ServiceDelete_NoTokenConsulNameDoesNotDeleteExistingService(t *testing.T) {
+	if testing.Short() {
+		t.Skip("too slow for testing.Short")
+	}
+
+	t.Parallel()
+
+	dir1, s1 := testServerWithConfig(t, func(c *Config) {
+		c.PrimaryDatacenter = "dc1"
+		c.ACLsEnabled = true
+		c.ACLInitialManagementToken = "root"
+		c.ACLResolverSettings.ACLDefaultPolicy = "deny"
+	})
+	defer os.RemoveAll(dir1)
+	defer s1.Shutdown()
+
+	testrpc.WaitForLeader(t, s1.RPC, "dc1")
+
+	state := s1.fsm.State()
+	require.NoError(t, state.EnsureNode(1, &structs.Node{
+		Node:    "victim-node",
+		Address: "127.0.0.1",
+	}))
+
+	require.NoError(t, state.EnsureService(2, "victim-node", &structs.NodeService{
+		ID:      "victim-id",
+		Service: "victim-service",
+		Address: "127.0.0.1",
+	}))
+
+	arg := structs.TxnRequest{
+		Datacenter: "dc1",
+		Ops: structs.TxnOps{
+			{
+				Service: &structs.TxnServiceOp{
+					Verb: api.ServiceDelete,
+					Node: "victim-node",
+					Service: structs.NodeService{
+						ID:      "victim-id",
+						Service: "consul",
+					},
+				},
+			},
+		},
+		// Intentionally no token.
+	}
+
+	var txnResp structs.TxnResponse
+	require.NoError(t, s1.RPC(context.Background(), "Txn.Apply", &arg, &txnResp))
+	require.Len(t, txnResp.Errors, 1)
+	require.Contains(t, txnResp.Errors[0].What, "does not match existing service name")
+
+	_, svc, err := state.NodeService(nil, "victim-node", "victim-id", nil, "")
+	require.NoError(t, err)
+	require.NotNil(t, svc)
+	require.Equal(t, "victim-service", svc.Service)
+}
+
+func TestTxn_Apply_ServiceSet_NoTokenCannotWriteConsulService(t *testing.T) {
+	if testing.Short() {
+		t.Skip("too slow for testing.Short")
+	}
+
+	t.Parallel()
+
+	dir1, s1 := testServerWithConfig(t, func(c *Config) {
+		c.PrimaryDatacenter = "dc1"
+		c.ACLsEnabled = true
+		c.ACLInitialManagementToken = "root"
+		c.ACLResolverSettings.ACLDefaultPolicy = "deny"
+	})
+	defer os.RemoveAll(dir1)
+	defer s1.Shutdown()
+
+	testrpc.WaitForLeader(t, s1.RPC, "dc1")
+
+	state := s1.fsm.State()
+	require.NoError(t, state.EnsureNode(1, &structs.Node{
+		Node:    "victim-node",
+		Address: "127.0.0.1",
+	}))
+
+	require.NoError(t, state.EnsureService(2, "victim-node", &structs.NodeService{
+		ID:      "consul-id",
+		Service: "consul",
+		Address: "127.0.0.1",
+		Port:    8300,
+	}))
+
+	arg := structs.TxnRequest{
+		Datacenter: "dc1",
+		Ops: structs.TxnOps{
+			{
+				Service: &structs.TxnServiceOp{
+					Verb: api.ServiceSet,
+					Node: "victim-node",
+					Service: structs.NodeService{
+						ID:      "consul-id",
+						Service: "consul",
+						Address: "198.51.100.7",
+						Port:    8443,
+					},
+				},
+			},
+		},
+		// Intentionally no token.
+	}
+
+	var txnResp structs.TxnResponse
+	require.NoError(t, s1.RPC(context.Background(), "Txn.Apply", &arg, &txnResp))
+	require.Len(t, txnResp.Errors, 1)
+
+	_, svc, err := state.NodeService(nil, "victim-node", "consul-id", nil, "")
+	require.NoError(t, err)
+	require.NotNil(t, svc)
+	require.Equal(t, "consul", svc.Service)
+	require.Equal(t, "127.0.0.1", svc.Address)
+	require.Equal(t, 8300, svc.Port)
+}
+
+// TestTxn_Apply_NodeSetRejectsCrossNodeTakeoverByID verifies that Txn.Apply /
+// NodeSet with a victim's Node.ID but the attacker's node name is rejected when
+// the caller lacks write permission on the victim's real node name.
+//
+// Without the fix in vetNodeTxnOp, the ACL check only examined the attacker's
+// own node name and passed; ensureNodeTxn then resolved by ID and cascade-
+// deleted the victim.
+func TestTxn_Apply_NodeSetRejectsCrossNodeTakeoverByID(t *testing.T) {
+	if testing.Short() {
+		t.Skip("too slow for testing.Short")
+	}
+	t.Parallel()
+
+	dir1, s1 := testServerWithConfig(t, func(c *Config) {
+		c.PrimaryDatacenter = "dc1"
+		c.ACLsEnabled = true
+		c.ACLInitialManagementToken = "root"
+		c.ACLResolverSettings.ACLDefaultPolicy = "deny"
+	})
+	defer os.RemoveAll(dir1)
+	defer s1.Shutdown()
+	testrpc.WaitForLeader(t, s1.RPC, "dc1")
+	codec := rpcClient(t, s1)
+	defer codec.Close()
+
+	victimID := types.NodeID("11111111-2222-3333-4444-555555555555")
+
+	// Register victim node with a service via the management token.
+	state := s1.fsm.State()
+	require.NoError(t, state.EnsureNode(1, &structs.Node{
+		ID:      victimID,
+		Node:    "victim-node",
+		Address: "10.0.0.1",
+	}))
+	require.NoError(t, state.EnsureService(2, "victim-node", &structs.NodeService{
+		ID:      "victim-svc",
+		Service: "victim-svc",
+		Address: "10.0.0.1",
+		Port:    9999,
+	}))
+
+	// Attacker token: write on "attacker-node" only.
+	attackerToken := createToken(t, rpcClient(t, s1), `
+node "attacker-node" {
+  policy = "write"
+}`)
+
+	// Attacker submits a NodeSet Txn using their own node name but the
+	// victim's Node.ID. The fix must reject this with permission denied.
+	arg := structs.TxnRequest{
+		Datacenter: "dc1",
+		Ops: structs.TxnOps{
+			{
+				Node: &structs.TxnNodeOp{
+					Verb: api.NodeSet,
+					Node: structs.Node{
+						ID:      victimID,
+						Node:    "attacker-node",
+						Address: "10.0.0.2",
+					},
+				},
+			},
+		},
+		WriteRequest: structs.WriteRequest{Token: attackerToken},
+	}
+	var out structs.TxnResponse
+	err := msgpackrpc.CallWithCodec(codec, "Txn.Apply", &arg, &out)
+
+	// Either the RPC itself returns an error, or the error is surfaced inside
+	// the TxnResponse.Errors slice (Txn.Apply returns errors per-op).
+	hasPermDenied := acl.IsErrPermissionDenied(err)
+	if !hasPermDenied && len(out.Errors) > 0 {
+		hasPermDenied = strings.Contains(out.Errors[0].Error(), acl.ErrPermissionDenied.Error())
+	}
+	require.True(t, hasPermDenied, "expected the cross-node takeover to be rejected with a permission error; err=%v txnErrors=%v", err, out.Errors)
+
+	// Victim node must still exist.
+	_, victimNode, err := state.GetNodeID(victimID, structs.NodeEnterpriseMetaInDefaultPartition(), "")
+	require.NoError(t, err)
+	require.NotNil(t, victimNode, "victim node was deleted — cross-node takeover succeeded")
+	require.Equal(t, "victim-node", victimNode.Node)
 }

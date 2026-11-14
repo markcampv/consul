@@ -4,7 +4,7 @@
 }}
 
 <Route
-  @name={{routeName}}
+  @name={{this.routeName}}
 as |route|>
   <DataLoader
     @src={{
@@ -13,36 +13,35 @@ as |route|>
         partition=route.params.partition
         nspace=route.params.nspace
         dc=route.params.dc
-      )}}
-    as |api|>
+      )}}>
 
-    <BlockSlot @name="error">
+    <:error as |api|>
       <AppError
         @error={{api.error}}
         @login={{route.model.app.login.open}}
       />
-    </BlockSlot>
+    </:error>
 
-    <BlockSlot @name="loaded">
+    <:loaded as |api|>
   {{#let
 
     (hash
-      value=(or sortBy "Action:asc")
-      change=(action (mut sortBy) value="target.selected")
+      value=(or this.sortBy "Action:asc")
+      change=(action (mut this.sortBy) value="target.selected")
     )
 
     (hash
       access=(hash
-        value=(if access (split access ',') undefined)
-        change=(action (mut access) value="target.selectedItems")
+        value=(if this.access (split this.access ',') undefined)
+        change=(action (mut this.access) value="target.selectedItems")
       )
       searchproperty=(hash
-        value=(if (not-eq searchproperty undefined)
-          (split searchproperty ',')
-          searchProperties
+        value=(if (not-eq this.searchproperty undefined)
+          (split this.searchproperty ',')
+          this.searchProperties
         )
-        change=(action (mut searchproperty) value="target.selectedItems")
-        default=searchProperties
+        change=(action (mut this.searchproperty) value="target.selectedItems")
+        default=this.searchProperties
       )
     )
 
@@ -51,36 +50,23 @@ as |route|>
   as |sort filters items|}}
 
     <AppView>
-      <BlockSlot @name="header">
+      <:header>
           <h1>
-            <route.Title @title="Intentions" /> <em>{{format-number items.length}} total</em>
+            <route.Title @title="Intentions" />
           </h1>
-          <label for="toolbar-toggle"></label>
-      </BlockSlot>
-      <BlockSlot @name="actions">
+      </:header>
+      <:actions>
   {{#if (can 'create intentions')}}
     <Hds::Button
       @text='Create'
+      @icon='plus'
       @route='dc.intentions.create'
       data-test-create
     />
   {{/if}}
-      </BlockSlot>
-      <BlockSlot @name="toolbar">
-
-  {{#if (gt items.length 0) }}
-        <Consul::Intention::SearchBar
-          @search={{search}}
-          @onsearch={{action (mut search) value="target.value"}}
-
-          @sort={{sort}}
-
-          @filter={{filters}}
-        />
-  {{/if}}
-
-      </BlockSlot>
-      <BlockSlot @name="content">
+      </:actions>
+      <:content>
+        {{#let (refresh-route) as |refreshRoute|}}
         <DataWriter
           @sink={{uri '/${partition}/${dc}/${nspace}/intention/'
             (hash
@@ -90,72 +76,91 @@ as |route|>
             )
           }}
           @type="intention"
-          @ondelete={{refresh-route}}
-        as |writer|>
-          <BlockSlot @name="content">
-            <DataCollection
-              @type="intention"
-              @sort={{sort.value}}
-              @filters={{filters}}
-              @search={{search}}
+          @ondelete={{refreshRoute}}
+          @onchange={{refreshRoute}}>
+          <:content as |writer|>
+            {{! CRD alert renders above the card when intentions are CRD-managed }}
+            <Consul::Intention::List
               @items={{items}}
-            as |collection|>
-              <collection.Collection>
-                <Consul::Intention::List
-                  @items={{collection.items}}
-                  @delete={{writer.delete}}
-                as |list|>
-                    <list.CustomResourceNotice />
-                    <list.Table />
-                </Consul::Intention::List>
-              </collection.Collection>
-              <collection.Empty>
-                <EmptyState
-                  @login={{route.model.app.login.open}}
-                >
-                  <BlockSlot @name="header">
-                    <h2>
-                      {{t 'routes.dc.intentions.index.empty.header'
+              @delete={{writer.delete}}
+            as |list|>
+              {{#if list.isManagedByCRDs}}
+                <Consul::Intention::Notice::CustomResource />
+              {{/if}}
+              <DataCollection
+                @type="intention"
+                @sort={{sort.value}}
+                @filters={{filters}}
+                @search={{this.search}}
+                @items={{items}}
+              as |collection|>
+                <collection.Collection>
+                  <Consul::Intention::List::Table
+                    @items={{collection.items}}
+                    @delete={{writer.delete}}
+                  >
+                    {{! Toolbar lives inside the card, above the table }}
+                    <:toolbar>
+                      {{#if (gt items.length 0)}}
+                        <Consul::Intention::Toolbar
+                          @search={{this.search}}
+                          @onsearch={{action (mut this.search) value="target.value"}}
+                          @filter={{filters}}
+                          @sort={{sort}}
+                        />
+                      {{/if}}
+                    </:toolbar>
+                  </Consul::Intention::List::Table>
+                </collection.Collection>
+                <collection.Empty>
+                  <EmptyState
+                    @login={{route.model.app.login.open}}
+                  >
+                    <:header>
+                      <h2>
+                        {{t 'routes.dc.intentions.index.empty.header'
+                          items=items.length
+                        }}
+                      </h2>
+                    </:header>
+                    <:body>
+                      {{t 'routes.dc.intentions.index.empty.body'
                         items=items.length
+                        canUseACLs=(can "use acls")
+                        htmlSafe=true
                       }}
-                    </h2>
-                  </BlockSlot>
-                  <BlockSlot @name="body">
-                    {{t 'routes.dc.intentions.index.empty.body'
-                      items=items.length
-                      canUseACLs=(can "use acls")
-                      htmlSafe=true
-                    }}
-                  </BlockSlot>
-                  <BlockSlot @name="actions">
-                    <li>
-                      <Hds::Link::Standalone
-                        @text='Documentation on intentions'
-                        @href="{{env 'CONSUL_DOCS_URL'}}/commands/intention"
-                        @icon='docs-link'
-                        @iconPosition='trailing'
-                        @size='small'
-                      />
-                    </li>
-                    <li>
-                      <Hds::Link::Standalone
-                        @text='Take the tutorial'
-                        @href="{{env 'CONSUL_DOCS_LEARN_URL'}}/consul/getting-started/connect"
-                        @icon='learn-link'
-                        @iconPosition='trailing'
-                        @size='small'
-                      />
-                    </li>
-                  </BlockSlot>
-                </EmptyState>
-              </collection.Empty>
-            </DataCollection>
-          </BlockSlot>
+                    </:body>
+                    <:actions>
+                      <li>
+                        <Hds::Link::Standalone
+                          @text='Documentation on intentions'
+                          @href="{{env 'CONSUL_DOCS_URL'}}/commands/intention"
+                          @icon='docs-link'
+                          @iconPosition='trailing'
+                          @size='small'
+                        />
+                      </li>
+                      <li>
+                        <Hds::Link::Standalone
+                          @text='Take the tutorial'
+                          @href="{{env 'CONSUL_DOCS_LEARN_URL'}}/consul/getting-started/connect"
+                          @icon='learn-link'
+                          @iconPosition='trailing'
+                          @size='small'
+                        />
+                      </li>
+                    </:actions>
+                  </EmptyState>
+                </collection.Empty>
+              </DataCollection>
+            </Consul::Intention::List>
+          </:content>
         </DataWriter>
-      </BlockSlot>
+        {{/let}}
+      </:content>
     </AppView>
 
   {{/let}}
-    </BlockSlot>
+    </:loaded>
   </DataLoader>
 </Route>

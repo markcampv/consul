@@ -1,17 +1,16 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
 import { inject as service } from '@ember/service';
-import { computed, get, set } from '@ember/object';
+import { computed, set } from '@ember/object';
 import Component from 'ember-collection/components/ember-collection';
 import PercentageColumns from 'ember-collection/layouts/percentage-columns';
-import Slotted from 'block-slots';
 
 const formatItemStyle = PercentageColumns.prototype.formatItemStyle;
 
-export default Component.extend(Slotted, {
+export default Component.extend({
   dom: service('dom'),
   tagName: '',
   height: 500,
@@ -33,33 +32,43 @@ export default Component.extend(Slotted, {
   didReceiveAttrs: function () {
     this._super(...arguments);
     this._cellLayout = this['cell-layout'] = new PercentageColumns(
-      get(this, 'items.length'),
+      this.items?.length,
       this.columns,
       this.cellHeight
     );
     const o = this;
     this['cell-layout'].formatItemStyle = function (itemIndex) {
       let style = formatItemStyle.apply(this, arguments);
-      if (o.checked === itemIndex) {
+      const items = o.items;
+      if (items && items[itemIndex] && o.checked === items[itemIndex].uid) {
         style = `${style};z-index: 1`;
       }
       return style;
     };
   },
-  style: computed('height', function () {
-    if (this.scroll !== 'virtual') {
-      return {};
-    }
-    return {
-      height: this.height,
-    };
+
+  style: computed('height', 'scroll', {
+    get() {
+      if (this.scroll !== 'virtual') {
+        return {};
+      } else {
+        return {
+          height: this.height,
+        };
+      }
+    },
+
+    set(_key, value) {
+      return value;
+    },
   }),
+
   actions: {
     resize: function (e) {
       // TODO: This top part is very similar to resize in tabular-collection
       // see if it make sense to DRY out
       const dom = this.dom;
-      const $footer = dom.element('footer[role="contentinfo"]');
+      const $footer = dom.element('#contentinfo');
       if ($footer) {
         const border = 1;
         const rect = this.$element.getBoundingClientRect();
@@ -75,7 +84,7 @@ export default Component.extend(Slotted, {
     },
     change: function (index, e = {}) {
       if (e.target.checked && index !== this.checked) {
-        set(this, 'checked', parseInt(index));
+        set(this, 'checked', index);
         this.$row = this.dom.closest('li', e.target);
         this.$row.style.zIndex = 1;
 
@@ -83,7 +92,7 @@ export default Component.extend(Slotted, {
         const groupRect = $group.getBoundingClientRect();
         const groupBottom = groupRect.top + $group.clientHeight;
 
-        const $footer = this.dom.element('footer[role="contentinfo"]');
+        const $footer = this.dom.element('#contentinfo');
         const footerRect = $footer.getBoundingClientRect();
         const footerTop = footerRect.top;
 

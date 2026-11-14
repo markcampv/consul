@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 //go:build !consulent
@@ -32,6 +32,4 @@ type EnterpriseConfig struct {
 	// no fields in CE
 }
 
-func (_ *EnterpriseConfig) Close() {
-	// do nothing
-}
+func (*EnterpriseConfig) Close() {}

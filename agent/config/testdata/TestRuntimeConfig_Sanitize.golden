@@ -49,6 +49,7 @@
                     "ModifyIndex": 0
                 },
                 "TokenLocality": "",
+                "TokenNameFormat": "hidden",
                 "Type": ""
             },
             "ClaimAssertions": [],
@@ -71,7 +72,6 @@
     "AutopilotDisableUpgradeMigration": false,
     "AutopilotLastContactThreshold": "0s",
     "AutopilotMaxTrailingLogs": 0,
-
     "AutopilotMinQuorum": 0,
     "AutopilotRedundancyZoneTag": "",
     "AutopilotServerStabilizationTime": "0s",
@@ -129,18 +129,6 @@
         }
     ],
     "ClientAddrs": [],
-    "Cloud": {
-        "AuthURL": "",
-        "ClientID": "id",
-        "ClientSecret": "hidden",
-        "Hostname": "",
-        "ManagementToken": "hidden",
-        "NodeID": "",
-        "NodeName": "",
-        "ResourceID": "cluster1",
-        "ScadaAddress": "",
-        "TLSConfig": null
-    },
     "ConfigEntryBootstrap": [],
     "ConnectCAConfig": {},
     "ConnectCAProvider": "",
@@ -149,6 +137,8 @@
     "ConnectSidecarMaxPort": 0,
     "ConnectSidecarMinPort": 0,
     "ConnectTestCALeafRootChangeSpread": "0s",
+    "ConnectVirtualIPCIDRv4": "",
+    "ConnectVirtualIPCIDRv6": "",
     "ConsulCoordinateUpdateBatchSize": 0,
     "ConsulCoordinateUpdateMaxBatches": 0,
     "ConsulCoordinateUpdatePeriod": "15s",
@@ -193,6 +183,7 @@
     "DisableCoordinates": false,
     "DisableHTTPUnprintableCharFilter": false,
     "DisableHostNodeID": false,
+    "DisableKVKeyValidation": false,
     "DisableKeyringFile": false,
     "DisableRemoteExec": false,
     "DisableUpdateCheck": false,
@@ -203,14 +194,18 @@
     "EnableDebug": false,
     "EnableLocalScriptChecks": false,
     "EnableRemoteScriptChecks": false,
+    "EnableXDSLoadBalancing": true,
     "EncryptKey": "hidden",
     "EnterpriseRuntimeConfig": {},
     "Experiments": [],
     "ExposeMaxPort": 0,
     "ExposeMinPort": 0,
+    "FeatureGatesBootstrap": {},
+    "FederationStateAntiEntropySyncInterval": "0s",
     "GRPCAddrs": [],
     "GRPCKeepaliveInterval": "0s",
     "GRPCKeepaliveTimeout": "0s",
+    "GRPCMaxConnsPerClient": 0,
     "GRPCPort": 0,
     "GRPCTLSAddrs": [],
     "GRPCTLSPort": 0,
@@ -231,14 +226,19 @@
         "unix:///var/run/foo"
     ],
     "HTTPBlockEndpoints": [],
+    "HTTPIdleTimeout": "0s",
     "HTTPMaxConnsPerClient": 0,
     "HTTPMaxHeaderBytes": 0,
+    "HTTPMaxRequestBodySize": 0,
     "HTTPPort": 0,
+    "HTTPReadHeaderTimeout": "0s",
+    "HTTPReadTimeout": "0s",
     "HTTPResponseHeaders": {},
     "HTTPSAddrs": [],
     "HTTPSHandshakeTimeout": "0s",
     "HTTPSPort": 0,
     "HTTPUseCache": false,
+    "HTTPWriteTimeout": "0s",
     "KVMaxValueSize": 1234567800000000,
     "LeaveDrainTime": "0s",
     "LeaveOnTerm": false,
@@ -280,6 +280,7 @@
     "RPCHoldTimeout": "0s",
     "RPCMaxBurst": 0,
     "RPCMaxConnsPerClient": 0,
+    "RPCMaxHeaderBytes": 0,
     "RPCProtocol": 0,
     "RPCRateLimit": 0,
     "RaftLogStoreConfig": {
@@ -296,11 +297,11 @@
             "SegmentSize": 0
         }
     },
+    "RaftPreVoteDisabled": false,
     "RaftProtocol": 3,
     "RaftSnapshotInterval": "0s",
     "RaftSnapshotThreshold": 0,
     "RaftTrailingLogs": 0,
-    "RaftPreVoteDisabled": false,
     "ReadReplica": false,
     "ReconnectTimeoutLAN": "0s",
     "ReconnectTimeoutWAN": "0s",
@@ -308,7 +309,8 @@
     "Reporting": {
         "License": {
             "Enabled": false
-        }
+        },
+        "SnapshotRetentionTime": "0s"
     },
     "RequestLimitsMode": 0,
     "RequestLimitsReadRate": 0,
@@ -345,6 +347,7 @@
     "ServerRejoinAgeMax": "168h0m0s",
     "Services": [
         {
+            "AI": null,
             "Address": "",
             "Check": {
                 "AliasNode": "",
@@ -392,6 +395,7 @@
             "Meta": {},
             "Name": "foo",
             "Port": 0,
+            "Ports": [],
             "Proxy": null,
             "SocketPath": "",
             "TaggedAddresses": {},
@@ -420,6 +424,7 @@
             "CAPath": "",
             "CertFile": "",
             "CipherSuites": [],
+            "ECDHCurves": [],
             "KeyFile": "hidden",
             "TLSMinVersion": "",
             "UseAutoCert": false,
@@ -432,6 +437,7 @@
             "CAPath": "",
             "CertFile": "",
             "CipherSuites": [],
+            "ECDHCurves": [],
             "KeyFile": "hidden",
             "TLSMinVersion": "",
             "UseAutoCert": false,
@@ -444,6 +450,7 @@
             "CAPath": "",
             "CertFile": "",
             "CipherSuites": [],
+            "ECDHCurves": [],
             "KeyFile": "hidden",
             "TLSMinVersion": "",
             "UseAutoCert": false,
@@ -459,6 +466,12 @@
     "Telemetry": {
         "AllowedPrefixes": [],
         "BlockedPrefixes": [],
+        "CertificateCacheDuration": "0s",
+        "CertificateCriticalThresholdDays": 0,
+        "CertificateEnabled": false,
+        "CertificateExcludeAutoRenewable": false,
+        "CertificateInfoThresholdDays": 0,
+        "CertificateWarningThresholdDays": 0,
         "CirconusAPIApp": "",
         "CirconusAPIToken": "hidden",
         "CirconusAPIURL": "",
@@ -492,6 +505,7 @@
         "StatsdAddr": "",
         "StatsiteAddr": ""
     },
+    "TokenDirs": "hidden",
     "TranslateWANAddrs": false,
     "TxnMaxReqLen": 5678000000000000,
     "UIConfig": {
@@ -499,7 +513,6 @@
         "DashboardURLTemplates": {},
         "Dir": "",
         "Enabled": false,
-        "HCPEnabled": false,
         "MetricsProvider": "",
         "MetricsProviderFiles": [],
         "MetricsProviderOptionsJSON": "",
@@ -522,6 +535,5 @@
     "VersionMetadata": "",
     "VersionPrerelease": "",
     "Watches": [],
-    "XDSUpdateRateLimit": 0,
-    "EnableXDSLoadBalancing":true
+    "XDSUpdateRateLimit": 0
 }

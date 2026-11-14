@@ -1,5 +1,5 @@
 /**
- * Copyright (c) HashiCorp, Inc.
+ * Copyright IBM Corp. 2024, 2026
  * SPDX-License-Identifier: BUSL-1.1
  */
 
@@ -33,6 +33,13 @@ const _uuid = function () {
  * including using forward and back buttons.
  */
 const route = function (e) {
+  if (!e.state) {
+    // Native in-page navigation (e.g. clicking a same-page hash anchor such
+    // as a "skip to main content" link) fires a popstate event with a null
+    // state, since it never went through our own dispatch(). There's no
+    // application route change to react to, so bail out early.
+    return;
+  }
   const path = e.state.path;
   const url = this.getURLForTransition(path);
   // Ignore initial page load popstate event in Chrome
@@ -93,7 +100,22 @@ export default class FSMWithOptionalLocation {
   }
 
   constructor(owner, doc, env) {
-    this.container = Object.entries(owner)[0][1];
+    // Simplified owner resolution (supports direct owner or symbol-wrapped)
+    let app = owner;
+    if (!app?.lookup && owner) {
+      for (const sym of Object.getOwnPropertySymbols(owner)) {
+        const val = owner[sym];
+        if (val?.lookup) {
+          app = val;
+          break;
+        }
+        if (val?.owner?.lookup) {
+          app = val.owner;
+          break;
+        }
+      }
+    }
+    this.container = app;
 
     // add the route/state change handler
     this.route = route.bind(this);

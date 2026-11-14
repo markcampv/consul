@@ -1,4 +1,4 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright IBM Corp. 2024, 2026
 // SPDX-License-Identifier: BUSL-1.1
 
 package oidcauth
@@ -117,7 +117,7 @@ func testJWT_OIDC_Functions_Fail(t *testing.T, authType int) {
 			context.Background(),
 			"abc", "def",
 		)
-		requireErrorContains(t, err, `ClaimsFromAuthCode is incompatible with type "jwt"`)
+		requireErrorContains(t, err, `auth code claims are incompatible with type "jwt"`)
 	})
 }
 
