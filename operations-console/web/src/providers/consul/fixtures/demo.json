@@ -1,0 +1,2281 @@
+{
+  "_comment": "Recorded from a real Consul agent by operations-console/scripts/record-fixtures.mjs. Do not edit by hand; re-record instead.",
+  "responses": {
+    "/v1/catalog/datacenters": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "x-consul-default-acl-policy": "allow"
+      },
+      "body": [
+        "dc1"
+      ]
+    },
+    "/v1/health/service/api?dc=dc1": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "x-consul-default-acl-policy": "allow",
+        "x-consul-knownleader": "true"
+      },
+      "body": [
+        {
+          "Node": {
+            "ID": "2de4ce6d-9050-b668-0706-c3d088773d2f",
+            "Node": "vm",
+            "Address": "127.0.0.1",
+            "Datacenter": "dc1",
+            "TaggedAddresses": {
+              "lan": "127.0.0.1",
+              "lan_ipv4": "127.0.0.1",
+              "wan": "127.0.0.1",
+              "wan_ipv4": "127.0.0.1"
+            },
+            "Meta": {
+              "consul-network-segment": "",
+              "consul-version": "3.0.0"
+            },
+            "CreateIndex": 1,
+            "ModifyIndex": 1
+          },
+          "Service": {
+            "ID": "api-1",
+            "Service": "api",
+            "Tags": [
+              "demo"
+            ],
+            "Address": "",
+            "Meta": {
+              "team": "platform"
+            },
+            "Port": 8081,
+            "Weights": {
+              "Passing": 1,
+              "Warning": 1
+            },
+            "EnableTagOverride": false,
+            "Proxy": {
+              "Mode": "",
+              "MeshGateway": {},
+              "Expose": {}
+            },
+            "Connect": {},
+            "PeerName": "",
+            "CreateIndex": 1,
+            "ModifyIndex": 1
+          },
+          "Checks": [
+            {
+              "Node": "vm",
+              "CheckID": "serfHealth",
+              "Name": "Serf Health Status",
+              "Status": "passing",
+              "Notes": "",
+              "Output": "Agent alive and reachable",
+              "ServiceID": "",
+              "ServiceName": "",
+              "ServiceTags": [],
+              "Type": "",
+              "Interval": "",
+              "Timeout": "",
+              "ExposedPort": 0,
+              "Definition": {},
+              "CreateIndex": 1,
+              "ModifyIndex": 1
+            },
+            {
+              "Node": "vm",
+              "CheckID": "api-1-ttl",
+              "Name": "api app",
+              "Status": "passing",
+              "Notes": "",
+              "Output": "seeded healthy",
+              "ServiceID": "api-1",
+              "ServiceName": "api",
+              "ServiceTags": [
+                "demo"
+              ],
+              "Type": "ttl",
+              "Interval": "",
+              "Timeout": "",
+              "ExposedPort": 0,
+              "Definition": {},
+              "CreateIndex": 1,
+              "ModifyIndex": 1
+            }
+          ]
+        },
+        {
+          "Node": {
+            "ID": "2de4ce6d-9050-b668-0706-c3d088773d2f",
+            "Node": "vm",
+            "Address": "127.0.0.1",
+            "Datacenter": "dc1",
+            "TaggedAddresses": {
+              "lan": "127.0.0.1",
+              "lan_ipv4": "127.0.0.1",
+              "wan": "127.0.0.1",
+              "wan_ipv4": "127.0.0.1"
+            },
+            "Meta": {
+              "consul-network-segment": "",
+              "consul-version": "3.0.0"
+            },
+            "CreateIndex": 1,
+            "ModifyIndex": 1
+          },
+          "Service": {
+            "ID": "api-2",
+            "Service": "api",
+            "Tags": [
+              "demo"
+            ],
+            "Address": "",
+            "Meta": {
+              "team": "platform"
+            },
+            "Port": 8082,
+            "Weights": {
+              "Passing": 1,
+              "Warning": 1
+            },
+            "EnableTagOverride": false,
+            "Proxy": {
+              "Mode": "",
+              "MeshGateway": {},
+              "Expose": {}
+            },
+            "Connect": {},
+            "PeerName": "",
+            "CreateIndex": 1,
+            "ModifyIndex": 1
+          },
+          "Checks": [
+            {
+              "Node": "vm",
+              "CheckID": "serfHealth",
+              "Name": "Serf Health Status",
+              "Status": "passing",
+              "Notes": "",
+              "Output": "Agent alive and reachable",
+              "ServiceID": "",
+              "ServiceName": "",
+              "ServiceTags": [],
+              "Type": "",
+              "Interval": "",
+              "Timeout": "",
+              "ExposedPort": 0,
+              "Definition": {},
+              "CreateIndex": 1,
+              "ModifyIndex": 1
+            },
+            {
+              "Node": "vm",
+              "CheckID": "api-2-ttl",
+              "Name": "api app",
+              "Status": "passing",
+              "Notes": "",
+              "Output": "seeded healthy",
+              "ServiceID": "api-2",
+              "ServiceName": "api",
+              "ServiceTags": [
+                "demo"
+              ],
+              "Type": "ttl",
+              "Interval": "",
+              "Timeout": "",
+              "ExposedPort": 0,
+              "Definition": {},
+              "CreateIndex": 1,
+              "ModifyIndex": 1
+            }
+          ]
+        }
+      ]
+    },
+    "/v1/health/service/audit?dc=dc1": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "x-consul-default-acl-policy": "allow",
+        "x-consul-knownleader": "true"
+      },
+      "body": [
+        {
+          "Node": {
+            "ID": "2de4ce6d-9050-b668-0706-c3d088773d2f",
+            "Node": "vm",
+            "Address": "127.0.0.1",
+            "Datacenter": "dc1",
+            "TaggedAddresses": {
+              "lan": "127.0.0.1",
+              "lan_ipv4": "127.0.0.1",
+              "wan": "127.0.0.1",
+              "wan_ipv4": "127.0.0.1"
+            },
+            "Meta": {
+              "consul-network-segment": "",
+              "consul-version": "3.0.0"
+            },
+            "CreateIndex": 1,
+            "ModifyIndex": 1
+          },
+          "Service": {
+            "ID": "audit-1",
+            "Service": "audit",
+            "Tags": [
+              "demo"
+            ],
+            "Address": "",
+            "Meta": {
+              "team": "platform"
+            },
+            "Port": 8087,
+            "Weights": {
+              "Passing": 1,
+              "Warning": 1
+            },
+            "EnableTagOverride": false,
+            "Proxy": {
+              "Mode": "",
+              "MeshGateway": {},
+              "Expose": {}
+            },
+            "Connect": {},
+            "PeerName": "",
+            "CreateIndex": 1,
+            "ModifyIndex": 1
+          },
+          "Checks": [
+            {
+              "Node": "vm",
+              "CheckID": "serfHealth",
+              "Name": "Serf Health Status",
+              "Status": "passing",
+              "Notes": "",
+              "Output": "Agent alive and reachable",
+              "ServiceID": "",
+              "ServiceName": "",
+              "ServiceTags": [],
+              "Type": "",
+              "Interval": "",
+              "Timeout": "",
+              "ExposedPort": 0,
+              "Definition": {},
+              "CreateIndex": 1,
+              "ModifyIndex": 1
+            },
+            {
+              "Node": "vm",
+              "CheckID": "audit-1-ttl",
+              "Name": "audit app",
+              "Status": "passing",
+              "Notes": "",
+              "Output": "seeded healthy",
+              "ServiceID": "audit-1",
+              "ServiceName": "audit",
+              "ServiceTags": [
+                "demo"
+              ],
+              "Type": "ttl",
+              "Interval": "",
+              "Timeout": "",
+              "ExposedPort": 0,
+              "Definition": {},
+              "CreateIndex": 1,
+              "ModifyIndex": 1
+            }
+          ]
+        }
+      ]
+    },
+    "/v1/health/service/consul?dc=dc1": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "x-consul-default-acl-policy": "allow",
+        "x-consul-knownleader": "true"
+      },
+      "body": [
+        {
+          "Node": {
+            "ID": "2de4ce6d-9050-b668-0706-c3d088773d2f",
+            "Node": "vm",
+            "Address": "127.0.0.1",
+            "Datacenter": "dc1",
+            "TaggedAddresses": {
+              "lan": "127.0.0.1",
+              "lan_ipv4": "127.0.0.1",
+              "wan": "127.0.0.1",
+              "wan_ipv4": "127.0.0.1"
+            },
+            "Meta": {
+              "consul-network-segment": "",
+              "consul-version": "3.0.0"
+            },
+            "CreateIndex": 1,
+            "ModifyIndex": 1
+          },
+          "Service": {
+            "ID": "consul",
+            "Service": "consul",
+            "Tags": [],
+            "Address": "",
+            "Meta": {
+              "grpc_port": "8502",
+              "grpc_tls_port": "8503",
+              "non_voter": "false",
+              "raft_version": "3",
+              "read_replica": "false",
+              "serf_protocol_current": "2",
+              "serf_protocol_max": "5",
+              "serf_protocol_min": "1",
+              "version": "3.0.0"
+            },
+            "Port": 8300,
+            "Weights": {
+              "Passing": 1,
+              "Warning": 1
+            },
+            "EnableTagOverride": false,
+            "Proxy": {
+              "Mode": "",
+              "MeshGateway": {},
+              "Expose": {}
+            },
+            "Connect": {},
+            "PeerName": "",
+            "CreateIndex": 1,
+            "ModifyIndex": 1
+          },
+          "Checks": [
+            {
+              "Node": "vm",
+              "CheckID": "serfHealth",
+              "Name": "Serf Health Status",
+              "Status": "passing",
+              "Notes": "",
+              "Output": "Agent alive and reachable",
+              "ServiceID": "",
+              "ServiceName": "",
+              "ServiceTags": [],
+              "Type": "",
+              "Interval": "",
+              "Timeout": "",
+              "ExposedPort": 0,
+              "Definition": {},
+              "CreateIndex": 1,
+              "ModifyIndex": 1
+            }
+          ]
+        }
+      ]
+    },
+    "/v1/health/service/frontend?dc=dc1": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "x-consul-default-acl-policy": "allow",
+        "x-consul-knownleader": "true"
+      },
+      "body": [
+        {
+          "Node": {
+            "ID": "2de4ce6d-9050-b668-0706-c3d088773d2f",
+            "Node": "vm",
+            "Address": "127.0.0.1",
+            "Datacenter": "dc1",
+            "TaggedAddresses": {
+              "lan": "127.0.0.1",
+              "lan_ipv4": "127.0.0.1",
+              "wan": "127.0.0.1",
+              "wan_ipv4": "127.0.0.1"
+            },
+            "Meta": {
+              "consul-network-segment": "",
+              "consul-version": "3.0.0"
+            },
+            "CreateIndex": 1,
+            "ModifyIndex": 1
+          },
+          "Service": {
+            "ID": "frontend-1",
+            "Service": "frontend",
+            "Tags": [
+              "demo"
+            ],
+            "Address": "",
+            "Meta": {
+              "team": "platform"
+            },
+            "Port": 8080,
+            "Weights": {
+              "Passing": 1,
+              "Warning": 1
+            },
+            "EnableTagOverride": false,
+            "Proxy": {
+              "Mode": "",
+              "MeshGateway": {},
+              "Expose": {}
+            },
+            "Connect": {},
+            "PeerName": "",
+            "CreateIndex": 1,
+            "ModifyIndex": 1
+          },
+          "Checks": [
+            {
+              "Node": "vm",
+              "CheckID": "serfHealth",
+              "Name": "Serf Health Status",
+              "Status": "passing",
+              "Notes": "",
+              "Output": "Agent alive and reachable",
+              "ServiceID": "",
+              "ServiceName": "",
+              "ServiceTags": [],
+              "Type": "",
+              "Interval": "",
+              "Timeout": "",
+              "ExposedPort": 0,
+              "Definition": {},
+              "CreateIndex": 1,
+              "ModifyIndex": 1
+            },
+            {
+              "Node": "vm",
+              "CheckID": "frontend-1-ttl",
+              "Name": "frontend app",
+              "Status": "passing",
+              "Notes": "",
+              "Output": "seeded healthy",
+              "ServiceID": "frontend-1",
+              "ServiceName": "frontend",
+              "ServiceTags": [
+                "demo"
+              ],
+              "Type": "ttl",
+              "Interval": "",
+              "Timeout": "",
+              "ExposedPort": 0,
+              "Definition": {},
+              "CreateIndex": 1,
+              "ModifyIndex": 1
+            }
+          ]
+        }
+      ]
+    },
+    "/v1/health/service/inventory?dc=dc1": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "x-consul-default-acl-policy": "allow",
+        "x-consul-knownleader": "true"
+      },
+      "body": [
+        {
+          "Node": {
+            "ID": "2de4ce6d-9050-b668-0706-c3d088773d2f",
+            "Node": "vm",
+            "Address": "127.0.0.1",
+            "Datacenter": "dc1",
+            "TaggedAddresses": {
+              "lan": "127.0.0.1",
+              "lan_ipv4": "127.0.0.1",
+              "wan": "127.0.0.1",
+              "wan_ipv4": "127.0.0.1"
+            },
+            "Meta": {
+              "consul-network-segment": "",
+              "consul-version": "3.0.0"
+            },
+            "CreateIndex": 1,
+            "ModifyIndex": 1
+          },
+          "Service": {
+            "ID": "inventory-1",
+            "Service": "inventory",
+            "Tags": [
+              "demo"
+            ],
+            "Address": "",
+            "Meta": {
+              "team": "platform"
+            },
+            "Port": 8085,
+            "Weights": {
+              "Passing": 1,
+              "Warning": 1
+            },
+            "EnableTagOverride": false,
+            "Proxy": {
+              "Mode": "",
+              "MeshGateway": {},
+              "Expose": {}
+            },
+            "Connect": {},
+            "PeerName": "",
+            "CreateIndex": 1,
+            "ModifyIndex": 1
+          },
+          "Checks": [
+            {
+              "Node": "vm",
+              "CheckID": "serfHealth",
+              "Name": "Serf Health Status",
+              "Status": "passing",
+              "Notes": "",
+              "Output": "Agent alive and reachable",
+              "ServiceID": "",
+              "ServiceName": "",
+              "ServiceTags": [],
+              "Type": "",
+              "Interval": "",
+              "Timeout": "",
+              "ExposedPort": 0,
+              "Definition": {},
+              "CreateIndex": 1,
+              "ModifyIndex": 1
+            },
+            {
+              "Node": "vm",
+              "CheckID": "inventory-1-ttl",
+              "Name": "inventory app",
+              "Status": "warning",
+              "Notes": "",
+              "Output": "seeded warning: p99 latency above SLO",
+              "ServiceID": "inventory-1",
+              "ServiceName": "inventory",
+              "ServiceTags": [
+                "demo"
+              ],
+              "Type": "ttl",
+              "Interval": "",
+              "Timeout": "",
+              "ExposedPort": 0,
+              "Definition": {},
+              "CreateIndex": 1,
+              "ModifyIndex": 1
+            }
+          ]
+        }
+      ]
+    },
+    "/v1/health/service/ledger?dc=dc1": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "x-consul-default-acl-policy": "allow",
+        "x-consul-knownleader": "true"
+      },
+      "body": [
+        {
+          "Node": {
+            "ID": "2de4ce6d-9050-b668-0706-c3d088773d2f",
+            "Node": "vm",
+            "Address": "127.0.0.1",
+            "Datacenter": "dc1",
+            "TaggedAddresses": {
+              "lan": "127.0.0.1",
+              "lan_ipv4": "127.0.0.1",
+              "wan": "127.0.0.1",
+              "wan_ipv4": "127.0.0.1"
+            },
+            "Meta": {
+              "consul-network-segment": "",
+              "consul-version": "3.0.0"
+            },
+            "CreateIndex": 1,
+            "ModifyIndex": 1
+          },
+          "Service": {
+            "ID": "ledger-1",
+            "Service": "ledger",
+            "Tags": [
+              "demo"
+            ],
+            "Address": "",
+            "Meta": {
+              "team": "platform"
+            },
+            "Port": 8086,
+            "Weights": {
+              "Passing": 1,
+              "Warning": 1
+            },
+            "EnableTagOverride": false,
+            "Proxy": {
+              "Mode": "",
+              "MeshGateway": {},
+              "Expose": {}
+            },
+            "Connect": {},
+            "PeerName": "",
+            "CreateIndex": 1,
+            "ModifyIndex": 1
+          },
+          "Checks": [
+            {
+              "Node": "vm",
+              "CheckID": "serfHealth",
+              "Name": "Serf Health Status",
+              "Status": "passing",
+              "Notes": "",
+              "Output": "Agent alive and reachable",
+              "ServiceID": "",
+              "ServiceName": "",
+              "ServiceTags": [],
+              "Type": "",
+              "Interval": "",
+              "Timeout": "",
+              "ExposedPort": 0,
+              "Definition": {},
+              "CreateIndex": 1,
+              "ModifyIndex": 1
+            },
+            {
+              "Node": "vm",
+              "CheckID": "ledger-1-ttl",
+              "Name": "ledger app",
+              "Status": "passing",
+              "Notes": "",
+              "Output": "seeded healthy",
+              "ServiceID": "ledger-1",
+              "ServiceName": "ledger",
+              "ServiceTags": [
+                "demo"
+              ],
+              "Type": "ttl",
+              "Interval": "",
+              "Timeout": "",
+              "ExposedPort": 0,
+              "Definition": {},
+              "CreateIndex": 1,
+              "ModifyIndex": 1
+            }
+          ]
+        }
+      ]
+    },
+    "/v1/health/service/legacy-billing?dc=dc1": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "x-consul-default-acl-policy": "allow",
+        "x-consul-knownleader": "true"
+      },
+      "body": [
+        {
+          "Node": {
+            "ID": "2de4ce6d-9050-b668-0706-c3d088773d2f",
+            "Node": "vm",
+            "Address": "127.0.0.1",
+            "Datacenter": "dc1",
+            "TaggedAddresses": {
+              "lan": "127.0.0.1",
+              "lan_ipv4": "127.0.0.1",
+              "wan": "127.0.0.1",
+              "wan_ipv4": "127.0.0.1"
+            },
+            "Meta": {
+              "consul-network-segment": "",
+              "consul-version": "3.0.0"
+            },
+            "CreateIndex": 1,
+            "ModifyIndex": 1
+          },
+          "Service": {
+            "ID": "legacy-billing-1",
+            "Service": "legacy-billing",
+            "Tags": [
+              "legacy"
+            ],
+            "Address": "",
+            "Meta": null,
+            "Port": 9090,
+            "Weights": {
+              "Passing": 1,
+              "Warning": 1
+            },
+            "EnableTagOverride": false,
+            "Proxy": {
+              "Mode": "",
+              "MeshGateway": {},
+              "Expose": {}
+            },
+            "Connect": {},
+            "PeerName": "",
+            "CreateIndex": 1,
+            "ModifyIndex": 1
+          },
+          "Checks": [
+            {
+              "Node": "vm",
+              "CheckID": "serfHealth",
+              "Name": "Serf Health Status",
+              "Status": "passing",
+              "Notes": "",
+              "Output": "Agent alive and reachable",
+              "ServiceID": "",
+              "ServiceName": "",
+              "ServiceTags": [],
+              "Type": "",
+              "Interval": "",
+              "Timeout": "",
+              "ExposedPort": 0,
+              "Definition": {},
+              "CreateIndex": 1,
+              "ModifyIndex": 1
+            },
+            {
+              "Node": "vm",
+              "CheckID": "legacy-billing-1-ttl",
+              "Name": "legacy app",
+              "Status": "passing",
+              "Notes": "",
+              "Output": "seeded healthy",
+              "ServiceID": "legacy-billing-1",
+              "ServiceName": "legacy-billing",
+              "ServiceTags": [
+                "legacy"
+              ],
+              "Type": "ttl",
+              "Interval": "",
+              "Timeout": "",
+              "ExposedPort": 0,
+              "Definition": {},
+              "CreateIndex": 1,
+              "ModifyIndex": 1
+            }
+          ]
+        }
+      ]
+    },
+    "/v1/health/service/legacy-gateway?dc=dc1": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "x-consul-default-acl-policy": "allow",
+        "x-consul-knownleader": "true"
+      },
+      "body": [
+        {
+          "Node": {
+            "ID": "2de4ce6d-9050-b668-0706-c3d088773d2f",
+            "Node": "vm",
+            "Address": "127.0.0.1",
+            "Datacenter": "dc1",
+            "TaggedAddresses": {
+              "lan": "127.0.0.1",
+              "lan_ipv4": "127.0.0.1",
+              "wan": "127.0.0.1",
+              "wan_ipv4": "127.0.0.1"
+            },
+            "Meta": {
+              "consul-network-segment": "",
+              "consul-version": "3.0.0"
+            },
+            "CreateIndex": 1,
+            "ModifyIndex": 1
+          },
+          "Service": {
+            "Kind": "terminating-gateway",
+            "ID": "legacy-gateway-1",
+            "Service": "legacy-gateway",
+            "Tags": [],
+            "Address": "",
+            "TaggedAddresses": {
+              "consul-virtual:legacy-billing": {
+                "Address": "240.0.0.9",
+                "Port": 0
+              }
+            },
+            "Meta": null,
+            "Port": 8444,
+            "Weights": {
+              "Passing": 1,
+              "Warning": 1
+            },
+            "EnableTagOverride": false,
+            "Proxy": {
+              "Mode": "",
+              "Config": {
+                "protocol": "http"
+              },
+              "MeshGateway": {},
+              "Expose": {}
+            },
+            "Connect": {},
+            "PeerName": "",
+            "CreateIndex": 1,
+            "ModifyIndex": 1
+          },
+          "Checks": [
+            {
+              "Node": "vm",
+              "CheckID": "serfHealth",
+              "Name": "Serf Health Status",
+              "Status": "passing",
+              "Notes": "",
+              "Output": "Agent alive and reachable",
+              "ServiceID": "",
+              "ServiceName": "",
+              "ServiceTags": [],
+              "Type": "",
+              "Interval": "",
+              "Timeout": "",
+              "ExposedPort": 0,
+              "Definition": {},
+              "CreateIndex": 1,
+              "ModifyIndex": 1
+            },
+            {
+              "Node": "vm",
+              "CheckID": "legacy-gateway-1-ttl",
+              "Name": "gateway alive",
+              "Status": "passing",
+              "Notes": "",
+              "Output": "seeded healthy",
+              "ServiceID": "legacy-gateway-1",
+              "ServiceName": "legacy-gateway",
+              "ServiceTags": [],
+              "Type": "ttl",
+              "Interval": "",
+              "Timeout": "",
+              "ExposedPort": 0,
+              "Definition": {},
+              "CreateIndex": 1,
+              "ModifyIndex": 1
+            }
+          ]
+        }
+      ]
+    },
+    "/v1/health/service/mesh-gateway?dc=dc1": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "x-consul-default-acl-policy": "allow",
+        "x-consul-knownleader": "true"
+      },
+      "body": [
+        {
+          "Node": {
+            "ID": "2de4ce6d-9050-b668-0706-c3d088773d2f",
+            "Node": "vm",
+            "Address": "127.0.0.1",
+            "Datacenter": "dc1",
+            "TaggedAddresses": {
+              "lan": "127.0.0.1",
+              "lan_ipv4": "127.0.0.1",
+              "wan": "127.0.0.1",
+              "wan_ipv4": "127.0.0.1"
+            },
+            "Meta": {
+              "consul-network-segment": "",
+              "consul-version": "3.0.0"
+            },
+            "CreateIndex": 1,
+            "ModifyIndex": 1
+          },
+          "Service": {
+            "Kind": "mesh-gateway",
+            "ID": "mesh-gateway-1",
+            "Service": "mesh-gateway",
+            "Tags": [],
+            "Address": "",
+            "Meta": null,
+            "Port": 8443,
+            "Weights": {
+              "Passing": 1,
+              "Warning": 1
+            },
+            "EnableTagOverride": false,
+            "Proxy": {
+              "Mode": "",
+              "Config": {
+                "protocol": "http"
+              },
+              "MeshGateway": {},
+              "Expose": {}
+            },
+            "Connect": {},
+            "PeerName": "",
+            "CreateIndex": 1,
+            "ModifyIndex": 1
+          },
+          "Checks": [
+            {
+              "Node": "vm",
+              "CheckID": "serfHealth",
+              "Name": "Serf Health Status",
+              "Status": "passing",
+              "Notes": "",
+              "Output": "Agent alive and reachable",
+              "ServiceID": "",
+              "ServiceName": "",
+              "ServiceTags": [],
+              "Type": "",
+              "Interval": "",
+              "Timeout": "",
+              "ExposedPort": 0,
+              "Definition": {},
+              "CreateIndex": 1,
+              "ModifyIndex": 1
+            },
+            {
+              "Node": "vm",
+              "CheckID": "mesh-gateway-1-ttl",
+              "Name": "gateway alive",
+              "Status": "passing",
+              "Notes": "",
+              "Output": "seeded healthy",
+              "ServiceID": "mesh-gateway-1",
+              "ServiceName": "mesh-gateway",
+              "ServiceTags": [],
+              "Type": "ttl",
+              "Interval": "",
+              "Timeout": "",
+              "ExposedPort": 0,
+              "Definition": {},
+              "CreateIndex": 1,
+              "ModifyIndex": 1
+            }
+          ]
+        }
+      ]
+    },
+    "/v1/health/service/payments?dc=dc1": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "x-consul-default-acl-policy": "allow",
+        "x-consul-knownleader": "true"
+      },
+      "body": [
+        {
+          "Node": {
+            "ID": "2de4ce6d-9050-b668-0706-c3d088773d2f",
+            "Node": "vm",
+            "Address": "127.0.0.1",
+            "Datacenter": "dc1",
+            "TaggedAddresses": {
+              "lan": "127.0.0.1",
+              "lan_ipv4": "127.0.0.1",
+              "wan": "127.0.0.1",
+              "wan_ipv4": "127.0.0.1"
+            },
+            "Meta": {
+              "consul-network-segment": "",
+              "consul-version": "3.0.0"
+            },
+            "CreateIndex": 1,
+            "ModifyIndex": 1
+          },
+          "Service": {
+            "ID": "payments-1",
+            "Service": "payments",
+            "Tags": [
+              "demo"
+            ],
+            "Address": "",
+            "Meta": {
+              "team": "platform"
+            },
+            "Port": 8083,
+            "Weights": {
+              "Passing": 1,
+              "Warning": 1
+            },
+            "EnableTagOverride": false,
+            "Proxy": {
+              "Mode": "",
+              "MeshGateway": {},
+              "Expose": {}
+            },
+            "Connect": {},
+            "PeerName": "",
+            "CreateIndex": 1,
+            "ModifyIndex": 1
+          },
+          "Checks": [
+            {
+              "Node": "vm",
+              "CheckID": "serfHealth",
+              "Name": "Serf Health Status",
+              "Status": "passing",
+              "Notes": "",
+              "Output": "Agent alive and reachable",
+              "ServiceID": "",
+              "ServiceName": "",
+              "ServiceTags": [],
+              "Type": "",
+              "Interval": "",
+              "Timeout": "",
+              "ExposedPort": 0,
+              "Definition": {},
+              "CreateIndex": 1,
+              "ModifyIndex": 1
+            },
+            {
+              "Node": "vm",
+              "CheckID": "payments-1-ttl",
+              "Name": "payments app",
+              "Status": "passing",
+              "Notes": "",
+              "Output": "seeded healthy",
+              "ServiceID": "payments-1",
+              "ServiceName": "payments",
+              "ServiceTags": [
+                "demo"
+              ],
+              "Type": "ttl",
+              "Interval": "",
+              "Timeout": "",
+              "ExposedPort": 0,
+              "Definition": {},
+              "CreateIndex": 1,
+              "ModifyIndex": 1
+            }
+          ]
+        },
+        {
+          "Node": {
+            "ID": "2de4ce6d-9050-b668-0706-c3d088773d2f",
+            "Node": "vm",
+            "Address": "127.0.0.1",
+            "Datacenter": "dc1",
+            "TaggedAddresses": {
+              "lan": "127.0.0.1",
+              "lan_ipv4": "127.0.0.1",
+              "wan": "127.0.0.1",
+              "wan_ipv4": "127.0.0.1"
+            },
+            "Meta": {
+              "consul-network-segment": "",
+              "consul-version": "3.0.0"
+            },
+            "CreateIndex": 1,
+            "ModifyIndex": 1
+          },
+          "Service": {
+            "ID": "payments-2",
+            "Service": "payments",
+            "Tags": [
+              "demo"
+            ],
+            "Address": "",
+            "Meta": {
+              "team": "platform"
+            },
+            "Port": 8084,
+            "Weights": {
+              "Passing": 1,
+              "Warning": 1
+            },
+            "EnableTagOverride": false,
+            "Proxy": {
+              "Mode": "",
+              "MeshGateway": {},
+              "Expose": {}
+            },
+            "Connect": {},
+            "PeerName": "",
+            "CreateIndex": 1,
+            "ModifyIndex": 1
+          },
+          "Checks": [
+            {
+              "Node": "vm",
+              "CheckID": "serfHealth",
+              "Name": "Serf Health Status",
+              "Status": "passing",
+              "Notes": "",
+              "Output": "Agent alive and reachable",
+              "ServiceID": "",
+              "ServiceName": "",
+              "ServiceTags": [],
+              "Type": "",
+              "Interval": "",
+              "Timeout": "",
+              "ExposedPort": 0,
+              "Definition": {},
+              "CreateIndex": 1,
+              "ModifyIndex": 1
+            },
+            {
+              "Node": "vm",
+              "CheckID": "payments-2-ttl",
+              "Name": "payments app",
+              "Status": "critical",
+              "Notes": "",
+              "Output": "seeded failure: connection refused on :8084",
+              "ServiceID": "payments-2",
+              "ServiceName": "payments",
+              "ServiceTags": [
+                "demo"
+              ],
+              "Type": "ttl",
+              "Interval": "",
+              "Timeout": "",
+              "ExposedPort": 0,
+              "Definition": {},
+              "CreateIndex": 1,
+              "ModifyIndex": 1
+            }
+          ]
+        }
+      ]
+    },
+    "/v1/internal/ui/service-topology/api?dc=dc1&kind=": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "x-consul-default-acl-policy": "allow",
+        "x-consul-knownleader": "true"
+      },
+      "body": {
+        "Protocol": "http",
+        "TransparentProxy": false,
+        "Upstreams": [
+          {
+            "Name": "inventory",
+            "Datacenter": "dc1",
+            "Tags": [
+              "demo"
+            ],
+            "Nodes": [
+              "vm"
+            ],
+            "ExternalSources": null,
+            "InstanceCount": 1,
+            "ChecksPassing": 1,
+            "ChecksWarning": 2,
+            "ChecksCritical": 0,
+            "GatewayConfig": {},
+            "TransparentProxy": false,
+            "ConnectNative": false,
+            "Source": "proxy-registration",
+            "Intention": {
+              "Allowed": false,
+              "HasPermissions": false,
+              "ExternalSource": "",
+              "HasExact": true,
+              "DefaultAllow": true
+            }
+          },
+          {
+            "Name": "payments",
+            "Datacenter": "dc1",
+            "Tags": [
+              "demo"
+            ],
+            "Nodes": [
+              "vm"
+            ],
+            "ExternalSources": null,
+            "InstanceCount": 2,
+            "ChecksPassing": 3,
+            "ChecksWarning": 0,
+            "ChecksCritical": 2,
+            "GatewayConfig": {},
+            "TransparentProxy": false,
+            "ConnectNative": false,
+            "Source": "proxy-registration",
+            "Intention": {
+              "Allowed": true,
+              "HasPermissions": false,
+              "ExternalSource": "",
+              "HasExact": false,
+              "DefaultAllow": true
+            }
+          }
+        ],
+        "Downstreams": [
+          {
+            "Name": "audit",
+            "Datacenter": "dc1",
+            "Tags": [
+              "demo"
+            ],
+            "Nodes": [
+              "vm"
+            ],
+            "ExternalSources": null,
+            "InstanceCount": 1,
+            "ChecksPassing": 3,
+            "ChecksWarning": 0,
+            "ChecksCritical": 0,
+            "GatewayConfig": {},
+            "TransparentProxy": true,
+            "ConnectNative": false,
+            "Source": "default-allow",
+            "Intention": {
+              "Allowed": true,
+              "HasPermissions": false,
+              "ExternalSource": "",
+              "HasExact": false,
+              "DefaultAllow": true
+            }
+          },
+          {
+            "Name": "frontend",
+            "Datacenter": "dc1",
+            "Tags": [
+              "demo"
+            ],
+            "Nodes": [
+              "vm"
+            ],
+            "ExternalSources": null,
+            "InstanceCount": 1,
+            "ChecksPassing": 3,
+            "ChecksWarning": 0,
+            "ChecksCritical": 0,
+            "GatewayConfig": {},
+            "TransparentProxy": false,
+            "ConnectNative": false,
+            "Source": "proxy-registration",
+            "Intention": {
+              "Allowed": true,
+              "HasPermissions": false,
+              "ExternalSource": "",
+              "HasExact": true,
+              "DefaultAllow": true
+            }
+          }
+        ],
+        "FilteredByACLs": false
+      }
+    },
+    "/v1/internal/ui/service-topology/audit?dc=dc1&kind=": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "x-consul-default-acl-policy": "allow",
+        "x-consul-knownleader": "true"
+      },
+      "body": {
+        "Protocol": "http",
+        "TransparentProxy": true,
+        "Upstreams": [
+          {
+            "Name": "api",
+            "Datacenter": "dc1",
+            "Tags": [
+              "demo"
+            ],
+            "Nodes": [
+              "vm"
+            ],
+            "ExternalSources": null,
+            "InstanceCount": 2,
+            "ChecksPassing": 5,
+            "ChecksWarning": 0,
+            "ChecksCritical": 0,
+            "GatewayConfig": {},
+            "TransparentProxy": false,
+            "ConnectNative": false,
+            "Source": "default-allow",
+            "Intention": {
+              "Allowed": true,
+              "HasPermissions": false,
+              "ExternalSource": "",
+              "HasExact": false,
+              "DefaultAllow": true
+            }
+          },
+          {
+            "Name": "frontend",
+            "Datacenter": "dc1",
+            "Tags": [
+              "demo"
+            ],
+            "Nodes": [
+              "vm"
+            ],
+            "ExternalSources": null,
+            "InstanceCount": 1,
+            "ChecksPassing": 3,
+            "ChecksWarning": 0,
+            "ChecksCritical": 0,
+            "GatewayConfig": {},
+            "TransparentProxy": false,
+            "ConnectNative": false,
+            "Source": "default-allow",
+            "Intention": {
+              "Allowed": true,
+              "HasPermissions": false,
+              "ExternalSource": "",
+              "HasExact": false,
+              "DefaultAllow": true
+            }
+          },
+          {
+            "Name": "inventory",
+            "Datacenter": "dc1",
+            "Tags": [
+              "demo"
+            ],
+            "Nodes": [
+              "vm"
+            ],
+            "ExternalSources": null,
+            "InstanceCount": 1,
+            "ChecksPassing": 1,
+            "ChecksWarning": 2,
+            "ChecksCritical": 0,
+            "GatewayConfig": {},
+            "TransparentProxy": false,
+            "ConnectNative": false,
+            "Source": "default-allow",
+            "Intention": {
+              "Allowed": true,
+              "HasPermissions": false,
+              "ExternalSource": "",
+              "HasExact": false,
+              "DefaultAllow": true
+            }
+          },
+          {
+            "Name": "ledger",
+            "Datacenter": "dc1",
+            "Tags": [
+              "demo"
+            ],
+            "Nodes": [
+              "vm"
+            ],
+            "ExternalSources": null,
+            "InstanceCount": 1,
+            "ChecksPassing": 3,
+            "ChecksWarning": 0,
+            "ChecksCritical": 0,
+            "GatewayConfig": {},
+            "TransparentProxy": false,
+            "ConnectNative": false,
+            "Source": "specific-intention",
+            "Intention": {
+              "Allowed": true,
+              "HasPermissions": false,
+              "ExternalSource": "",
+              "HasExact": true,
+              "DefaultAllow": true
+            }
+          },
+          {
+            "Name": "legacy-billing",
+            "Datacenter": "dc1",
+            "Tags": [
+              "legacy"
+            ],
+            "Nodes": [
+              "vm"
+            ],
+            "ExternalSources": null,
+            "InstanceCount": 1,
+            "ChecksPassing": 2,
+            "ChecksWarning": 0,
+            "ChecksCritical": 0,
+            "GatewayConfig": {},
+            "TransparentProxy": false,
+            "ConnectNative": false,
+            "Source": "default-allow",
+            "Intention": {
+              "Allowed": true,
+              "HasPermissions": false,
+              "ExternalSource": "",
+              "HasExact": false,
+              "DefaultAllow": true
+            }
+          },
+          {
+            "Name": "payments",
+            "Datacenter": "dc1",
+            "Tags": [
+              "demo"
+            ],
+            "Nodes": [
+              "vm"
+            ],
+            "ExternalSources": null,
+            "InstanceCount": 2,
+            "ChecksPassing": 3,
+            "ChecksWarning": 0,
+            "ChecksCritical": 2,
+            "GatewayConfig": {},
+            "TransparentProxy": false,
+            "ConnectNative": false,
+            "Source": "default-allow",
+            "Intention": {
+              "Allowed": true,
+              "HasPermissions": false,
+              "ExternalSource": "",
+              "HasExact": false,
+              "DefaultAllow": true
+            }
+          },
+          {
+            "Name": "checkout",
+            "Datacenter": "dc1",
+            "Tags": null,
+            "Nodes": null,
+            "ExternalSources": null,
+            "InstanceCount": 0,
+            "ChecksPassing": 0,
+            "ChecksWarning": 0,
+            "ChecksCritical": 0,
+            "GatewayConfig": {},
+            "TransparentProxy": false,
+            "ConnectNative": false,
+            "Source": "routing-config",
+            "Intention": {
+              "Allowed": true,
+              "HasPermissions": false,
+              "ExternalSource": "",
+              "HasExact": false,
+              "DefaultAllow": true
+            }
+          }
+        ],
+        "Downstreams": [],
+        "FilteredByACLs": false
+      }
+    },
+    "/v1/internal/ui/service-topology/consul?dc=dc1&kind=": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "x-consul-default-acl-policy": "allow",
+        "x-consul-knownleader": "true"
+      },
+      "body": {
+        "Protocol": "http",
+        "TransparentProxy": false,
+        "Upstreams": [],
+        "Downstreams": [
+          {
+            "Name": "audit",
+            "Datacenter": "dc1",
+            "Tags": [
+              "demo"
+            ],
+            "Nodes": [
+              "vm"
+            ],
+            "ExternalSources": null,
+            "InstanceCount": 1,
+            "ChecksPassing": 3,
+            "ChecksWarning": 0,
+            "ChecksCritical": 0,
+            "GatewayConfig": {},
+            "TransparentProxy": true,
+            "ConnectNative": false,
+            "Source": "default-allow",
+            "Intention": {
+              "Allowed": true,
+              "HasPermissions": false,
+              "ExternalSource": "",
+              "HasExact": false,
+              "DefaultAllow": true
+            }
+          }
+        ],
+        "FilteredByACLs": false
+      }
+    },
+    "/v1/internal/ui/service-topology/frontend?dc=dc1&kind=": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "x-consul-default-acl-policy": "allow",
+        "x-consul-knownleader": "true"
+      },
+      "body": {
+        "Protocol": "http",
+        "TransparentProxy": false,
+        "Upstreams": [
+          {
+            "Name": "api",
+            "Datacenter": "dc1",
+            "Tags": [
+              "demo"
+            ],
+            "Nodes": [
+              "vm"
+            ],
+            "ExternalSources": null,
+            "InstanceCount": 2,
+            "ChecksPassing": 5,
+            "ChecksWarning": 0,
+            "ChecksCritical": 0,
+            "GatewayConfig": {},
+            "TransparentProxy": false,
+            "ConnectNative": false,
+            "Source": "proxy-registration",
+            "Intention": {
+              "Allowed": true,
+              "HasPermissions": false,
+              "ExternalSource": "",
+              "HasExact": true,
+              "DefaultAllow": true
+            }
+          },
+          {
+            "Name": "checkout",
+            "Datacenter": "dc1",
+            "Tags": null,
+            "Nodes": null,
+            "ExternalSources": null,
+            "InstanceCount": 0,
+            "ChecksPassing": 0,
+            "ChecksWarning": 0,
+            "ChecksCritical": 0,
+            "GatewayConfig": {},
+            "TransparentProxy": false,
+            "ConnectNative": false,
+            "Source": "routing-config",
+            "Intention": {
+              "Allowed": true,
+              "HasPermissions": false,
+              "ExternalSource": "",
+              "HasExact": false,
+              "DefaultAllow": true
+            }
+          }
+        ],
+        "Downstreams": [
+          {
+            "Name": "audit",
+            "Datacenter": "dc1",
+            "Tags": [
+              "demo"
+            ],
+            "Nodes": [
+              "vm"
+            ],
+            "ExternalSources": null,
+            "InstanceCount": 1,
+            "ChecksPassing": 3,
+            "ChecksWarning": 0,
+            "ChecksCritical": 0,
+            "GatewayConfig": {},
+            "TransparentProxy": true,
+            "ConnectNative": false,
+            "Source": "default-allow",
+            "Intention": {
+              "Allowed": true,
+              "HasPermissions": false,
+              "ExternalSource": "",
+              "HasExact": false,
+              "DefaultAllow": true
+            }
+          }
+        ],
+        "FilteredByACLs": false
+      }
+    },
+    "/v1/internal/ui/service-topology/inventory?dc=dc1&kind=": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "x-consul-default-acl-policy": "allow",
+        "x-consul-knownleader": "true"
+      },
+      "body": {
+        "Protocol": "http",
+        "TransparentProxy": false,
+        "Upstreams": [],
+        "Downstreams": [
+          {
+            "Name": "api",
+            "Datacenter": "dc1",
+            "Tags": [
+              "demo"
+            ],
+            "Nodes": [
+              "vm"
+            ],
+            "ExternalSources": null,
+            "InstanceCount": 2,
+            "ChecksPassing": 5,
+            "ChecksWarning": 0,
+            "ChecksCritical": 0,
+            "GatewayConfig": {},
+            "TransparentProxy": false,
+            "ConnectNative": false,
+            "Source": "proxy-registration",
+            "Intention": {
+              "Allowed": false,
+              "HasPermissions": false,
+              "ExternalSource": "",
+              "HasExact": true,
+              "DefaultAllow": true
+            }
+          },
+          {
+            "Name": "audit",
+            "Datacenter": "dc1",
+            "Tags": [
+              "demo"
+            ],
+            "Nodes": [
+              "vm"
+            ],
+            "ExternalSources": null,
+            "InstanceCount": 1,
+            "ChecksPassing": 3,
+            "ChecksWarning": 0,
+            "ChecksCritical": 0,
+            "GatewayConfig": {},
+            "TransparentProxy": true,
+            "ConnectNative": false,
+            "Source": "default-allow",
+            "Intention": {
+              "Allowed": true,
+              "HasPermissions": false,
+              "ExternalSource": "",
+              "HasExact": false,
+              "DefaultAllow": true
+            }
+          }
+        ],
+        "FilteredByACLs": false
+      }
+    },
+    "/v1/internal/ui/service-topology/ledger?dc=dc1&kind=": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "x-consul-default-acl-policy": "allow",
+        "x-consul-knownleader": "true"
+      },
+      "body": {
+        "Protocol": "http",
+        "TransparentProxy": false,
+        "Upstreams": [],
+        "Downstreams": [
+          {
+            "Name": "audit",
+            "Datacenter": "dc1",
+            "Tags": [
+              "demo"
+            ],
+            "Nodes": [
+              "vm"
+            ],
+            "ExternalSources": null,
+            "InstanceCount": 1,
+            "ChecksPassing": 3,
+            "ChecksWarning": 0,
+            "ChecksCritical": 0,
+            "GatewayConfig": {},
+            "TransparentProxy": true,
+            "ConnectNative": false,
+            "Source": "specific-intention",
+            "Intention": {
+              "Allowed": true,
+              "HasPermissions": false,
+              "ExternalSource": "",
+              "HasExact": true,
+              "DefaultAllow": true
+            }
+          },
+          {
+            "Name": "payments",
+            "Datacenter": "dc1",
+            "Tags": [
+              "demo"
+            ],
+            "Nodes": [
+              "vm"
+            ],
+            "ExternalSources": null,
+            "InstanceCount": 2,
+            "ChecksPassing": 3,
+            "ChecksWarning": 0,
+            "ChecksCritical": 2,
+            "GatewayConfig": {},
+            "TransparentProxy": false,
+            "ConnectNative": false,
+            "Source": "proxy-registration",
+            "Intention": {
+              "Allowed": true,
+              "HasPermissions": false,
+              "ExternalSource": "",
+              "HasExact": false,
+              "DefaultAllow": true
+            }
+          }
+        ],
+        "FilteredByACLs": false
+      }
+    },
+    "/v1/internal/ui/service-topology/legacy-billing?dc=dc1&kind=": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "x-consul-default-acl-policy": "allow",
+        "x-consul-knownleader": "true"
+      },
+      "body": {
+        "Protocol": "http",
+        "TransparentProxy": false,
+        "Upstreams": [],
+        "Downstreams": [
+          {
+            "Name": "audit",
+            "Datacenter": "dc1",
+            "Tags": [
+              "demo"
+            ],
+            "Nodes": [
+              "vm"
+            ],
+            "ExternalSources": null,
+            "InstanceCount": 1,
+            "ChecksPassing": 3,
+            "ChecksWarning": 0,
+            "ChecksCritical": 0,
+            "GatewayConfig": {},
+            "TransparentProxy": true,
+            "ConnectNative": false,
+            "Source": "default-allow",
+            "Intention": {
+              "Allowed": true,
+              "HasPermissions": false,
+              "ExternalSource": "",
+              "HasExact": false,
+              "DefaultAllow": true
+            }
+          },
+          {
+            "Name": "payments",
+            "Datacenter": "dc1",
+            "Tags": [
+              "demo"
+            ],
+            "Nodes": [
+              "vm"
+            ],
+            "ExternalSources": null,
+            "InstanceCount": 2,
+            "ChecksPassing": 3,
+            "ChecksWarning": 0,
+            "ChecksCritical": 2,
+            "GatewayConfig": {},
+            "TransparentProxy": false,
+            "ConnectNative": false,
+            "Source": "proxy-registration",
+            "Intention": {
+              "Allowed": true,
+              "HasPermissions": false,
+              "ExternalSource": "",
+              "HasExact": false,
+              "DefaultAllow": true
+            }
+          }
+        ],
+        "FilteredByACLs": false
+      }
+    },
+    "/v1/internal/ui/service-topology/payments?dc=dc1&kind=": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "x-consul-default-acl-policy": "allow",
+        "x-consul-knownleader": "true"
+      },
+      "body": {
+        "Protocol": "http",
+        "TransparentProxy": false,
+        "Upstreams": [
+          {
+            "Name": "ledger",
+            "Datacenter": "dc1",
+            "Tags": [
+              "demo"
+            ],
+            "Nodes": [
+              "vm"
+            ],
+            "ExternalSources": null,
+            "InstanceCount": 1,
+            "ChecksPassing": 3,
+            "ChecksWarning": 0,
+            "ChecksCritical": 0,
+            "GatewayConfig": {},
+            "TransparentProxy": false,
+            "ConnectNative": false,
+            "Source": "proxy-registration",
+            "Intention": {
+              "Allowed": true,
+              "HasPermissions": false,
+              "ExternalSource": "",
+              "HasExact": false,
+              "DefaultAllow": true
+            }
+          },
+          {
+            "Name": "legacy-billing",
+            "Datacenter": "dc1",
+            "Tags": [
+              "legacy"
+            ],
+            "Nodes": [
+              "vm"
+            ],
+            "ExternalSources": null,
+            "InstanceCount": 1,
+            "ChecksPassing": 2,
+            "ChecksWarning": 0,
+            "ChecksCritical": 0,
+            "GatewayConfig": {},
+            "TransparentProxy": false,
+            "ConnectNative": false,
+            "Source": "proxy-registration",
+            "Intention": {
+              "Allowed": true,
+              "HasPermissions": false,
+              "ExternalSource": "",
+              "HasExact": false,
+              "DefaultAllow": true
+            }
+          }
+        ],
+        "Downstreams": [
+          {
+            "Name": "api",
+            "Datacenter": "dc1",
+            "Tags": [
+              "demo"
+            ],
+            "Nodes": [
+              "vm"
+            ],
+            "ExternalSources": null,
+            "InstanceCount": 2,
+            "ChecksPassing": 5,
+            "ChecksWarning": 0,
+            "ChecksCritical": 0,
+            "GatewayConfig": {},
+            "TransparentProxy": false,
+            "ConnectNative": false,
+            "Source": "proxy-registration",
+            "Intention": {
+              "Allowed": true,
+              "HasPermissions": false,
+              "ExternalSource": "",
+              "HasExact": false,
+              "DefaultAllow": true
+            }
+          },
+          {
+            "Name": "audit",
+            "Datacenter": "dc1",
+            "Tags": [
+              "demo"
+            ],
+            "Nodes": [
+              "vm"
+            ],
+            "ExternalSources": null,
+            "InstanceCount": 1,
+            "ChecksPassing": 3,
+            "ChecksWarning": 0,
+            "ChecksCritical": 0,
+            "GatewayConfig": {},
+            "TransparentProxy": true,
+            "ConnectNative": false,
+            "Source": "default-allow",
+            "Intention": {
+              "Allowed": true,
+              "HasPermissions": false,
+              "ExternalSource": "",
+              "HasExact": false,
+              "DefaultAllow": true
+            }
+          },
+          {
+            "Name": "frontend",
+            "Datacenter": "dc1",
+            "Tags": [
+              "demo"
+            ],
+            "Nodes": [
+              "vm"
+            ],
+            "ExternalSources": null,
+            "InstanceCount": 1,
+            "ChecksPassing": 3,
+            "ChecksWarning": 0,
+            "ChecksCritical": 0,
+            "GatewayConfig": {},
+            "TransparentProxy": false,
+            "ConnectNative": false,
+            "Source": "proxy-registration",
+            "Intention": {
+              "Allowed": true,
+              "HasPermissions": false,
+              "ExternalSource": "",
+              "HasExact": false,
+              "DefaultAllow": true
+            }
+          }
+        ],
+        "FilteredByACLs": false
+      }
+    },
+    "/v1/internal/ui/services?dc=dc1": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "x-consul-default-acl-policy": "allow",
+        "x-consul-knownleader": "true"
+      },
+      "body": [
+        {
+          "Name": "api",
+          "Datacenter": "dc1",
+          "Tags": [
+            "demo"
+          ],
+          "Nodes": [
+            "vm"
+          ],
+          "ExternalSources": null,
+          "InstanceCount": 2,
+          "ChecksPassing": 5,
+          "ChecksWarning": 0,
+          "ChecksCritical": 0,
+          "GatewayConfig": {},
+          "TransparentProxy": false,
+          "ConnectNative": false,
+          "ConnectedWithProxy": true,
+          "ConnectedWithGateway": false
+        },
+        {
+          "Kind": "connect-proxy",
+          "Name": "api-sidecar-proxy",
+          "Datacenter": "dc1",
+          "Tags": [
+            "demo"
+          ],
+          "Nodes": [
+            "vm"
+          ],
+          "ExternalSources": null,
+          "InstanceCount": 2,
+          "ChecksPassing": 3,
+          "ChecksWarning": 0,
+          "ChecksCritical": 0,
+          "GatewayConfig": {},
+          "TransparentProxy": false,
+          "ConnectNative": false,
+          "ConnectedWithProxy": false,
+          "ConnectedWithGateway": false
+        },
+        {
+          "Name": "audit",
+          "Datacenter": "dc1",
+          "Tags": [
+            "demo"
+          ],
+          "Nodes": [
+            "vm"
+          ],
+          "ExternalSources": null,
+          "InstanceCount": 1,
+          "ChecksPassing": 3,
+          "ChecksWarning": 0,
+          "ChecksCritical": 0,
+          "GatewayConfig": {},
+          "TransparentProxy": true,
+          "ConnectNative": false,
+          "ConnectedWithProxy": true,
+          "ConnectedWithGateway": false
+        },
+        {
+          "Kind": "connect-proxy",
+          "Name": "audit-sidecar-proxy",
+          "Datacenter": "dc1",
+          "Tags": [
+            "demo"
+          ],
+          "Nodes": [
+            "vm"
+          ],
+          "ExternalSources": null,
+          "InstanceCount": 1,
+          "ChecksPassing": 2,
+          "ChecksWarning": 0,
+          "ChecksCritical": 0,
+          "GatewayConfig": {},
+          "TransparentProxy": false,
+          "ConnectNative": false,
+          "ConnectedWithProxy": false,
+          "ConnectedWithGateway": false
+        },
+        {
+          "Name": "consul",
+          "Datacenter": "dc1",
+          "Tags": null,
+          "Nodes": [
+            "vm"
+          ],
+          "ExternalSources": null,
+          "InstanceCount": 1,
+          "ChecksPassing": 1,
+          "ChecksWarning": 0,
+          "ChecksCritical": 0,
+          "GatewayConfig": {},
+          "TransparentProxy": false,
+          "ConnectNative": false,
+          "ConnectedWithProxy": false,
+          "ConnectedWithGateway": false
+        },
+        {
+          "Name": "frontend",
+          "Datacenter": "dc1",
+          "Tags": [
+            "demo"
+          ],
+          "Nodes": [
+            "vm"
+          ],
+          "ExternalSources": null,
+          "InstanceCount": 1,
+          "ChecksPassing": 3,
+          "ChecksWarning": 0,
+          "ChecksCritical": 0,
+          "GatewayConfig": {},
+          "TransparentProxy": false,
+          "ConnectNative": false,
+          "ConnectedWithProxy": true,
+          "ConnectedWithGateway": false
+        },
+        {
+          "Kind": "connect-proxy",
+          "Name": "frontend-sidecar-proxy",
+          "Datacenter": "dc1",
+          "Tags": [
+            "demo"
+          ],
+          "Nodes": [
+            "vm"
+          ],
+          "ExternalSources": null,
+          "InstanceCount": 1,
+          "ChecksPassing": 2,
+          "ChecksWarning": 0,
+          "ChecksCritical": 0,
+          "GatewayConfig": {},
+          "TransparentProxy": false,
+          "ConnectNative": false,
+          "ConnectedWithProxy": false,
+          "ConnectedWithGateway": false
+        },
+        {
+          "Name": "inventory",
+          "Datacenter": "dc1",
+          "Tags": [
+            "demo"
+          ],
+          "Nodes": [
+            "vm"
+          ],
+          "ExternalSources": null,
+          "InstanceCount": 1,
+          "ChecksPassing": 1,
+          "ChecksWarning": 2,
+          "ChecksCritical": 0,
+          "GatewayConfig": {},
+          "TransparentProxy": false,
+          "ConnectNative": false,
+          "ConnectedWithProxy": true,
+          "ConnectedWithGateway": false
+        },
+        {
+          "Kind": "connect-proxy",
+          "Name": "inventory-sidecar-proxy",
+          "Datacenter": "dc1",
+          "Tags": [
+            "demo"
+          ],
+          "Nodes": [
+            "vm"
+          ],
+          "ExternalSources": null,
+          "InstanceCount": 1,
+          "ChecksPassing": 1,
+          "ChecksWarning": 1,
+          "ChecksCritical": 0,
+          "GatewayConfig": {},
+          "TransparentProxy": false,
+          "ConnectNative": false,
+          "ConnectedWithProxy": false,
+          "ConnectedWithGateway": false
+        },
+        {
+          "Name": "ledger",
+          "Datacenter": "dc1",
+          "Tags": [
+            "demo"
+          ],
+          "Nodes": [
+            "vm"
+          ],
+          "ExternalSources": null,
+          "InstanceCount": 1,
+          "ChecksPassing": 3,
+          "ChecksWarning": 0,
+          "ChecksCritical": 0,
+          "GatewayConfig": {},
+          "TransparentProxy": false,
+          "ConnectNative": false,
+          "ConnectedWithProxy": true,
+          "ConnectedWithGateway": false
+        },
+        {
+          "Kind": "connect-proxy",
+          "Name": "ledger-sidecar-proxy",
+          "Datacenter": "dc1",
+          "Tags": [
+            "demo"
+          ],
+          "Nodes": [
+            "vm"
+          ],
+          "ExternalSources": null,
+          "InstanceCount": 1,
+          "ChecksPassing": 2,
+          "ChecksWarning": 0,
+          "ChecksCritical": 0,
+          "GatewayConfig": {},
+          "TransparentProxy": false,
+          "ConnectNative": false,
+          "ConnectedWithProxy": false,
+          "ConnectedWithGateway": false
+        },
+        {
+          "Name": "legacy-billing",
+          "Datacenter": "dc1",
+          "Tags": [
+            "legacy"
+          ],
+          "Nodes": [
+            "vm"
+          ],
+          "ExternalSources": null,
+          "InstanceCount": 1,
+          "ChecksPassing": 2,
+          "ChecksWarning": 0,
+          "ChecksCritical": 0,
+          "GatewayConfig": {},
+          "TransparentProxy": false,
+          "ConnectNative": false,
+          "ConnectedWithProxy": false,
+          "ConnectedWithGateway": true
+        },
+        {
+          "Kind": "terminating-gateway",
+          "Name": "legacy-gateway",
+          "Datacenter": "dc1",
+          "Tags": null,
+          "Nodes": [
+            "vm"
+          ],
+          "ExternalSources": null,
+          "InstanceCount": 1,
+          "ChecksPassing": 2,
+          "ChecksWarning": 0,
+          "ChecksCritical": 0,
+          "GatewayConfig": {
+            "AssociatedServiceCount": 1
+          },
+          "TransparentProxy": false,
+          "ConnectNative": false,
+          "ConnectedWithProxy": false,
+          "ConnectedWithGateway": false
+        },
+        {
+          "Kind": "mesh-gateway",
+          "Name": "mesh-gateway",
+          "Datacenter": "dc1",
+          "Tags": null,
+          "Nodes": [
+            "vm"
+          ],
+          "ExternalSources": null,
+          "InstanceCount": 1,
+          "ChecksPassing": 2,
+          "ChecksWarning": 0,
+          "ChecksCritical": 0,
+          "GatewayConfig": {},
+          "TransparentProxy": false,
+          "ConnectNative": false,
+          "ConnectedWithProxy": false,
+          "ConnectedWithGateway": false
+        },
+        {
+          "Name": "payments",
+          "Datacenter": "dc1",
+          "Tags": [
+            "demo"
+          ],
+          "Nodes": [
+            "vm"
+          ],
+          "ExternalSources": null,
+          "InstanceCount": 2,
+          "ChecksPassing": 3,
+          "ChecksWarning": 0,
+          "ChecksCritical": 2,
+          "GatewayConfig": {},
+          "TransparentProxy": false,
+          "ConnectNative": false,
+          "ConnectedWithProxy": true,
+          "ConnectedWithGateway": false
+        },
+        {
+          "Kind": "connect-proxy",
+          "Name": "payments-sidecar-proxy",
+          "Datacenter": "dc1",
+          "Tags": [
+            "demo"
+          ],
+          "Nodes": [
+            "vm"
+          ],
+          "ExternalSources": null,
+          "InstanceCount": 2,
+          "ChecksPassing": 2,
+          "ChecksWarning": 0,
+          "ChecksCritical": 1,
+          "GatewayConfig": {},
+          "TransparentProxy": false,
+          "ConnectNative": false,
+          "ConnectedWithProxy": false,
+          "ConnectedWithGateway": false
+        }
+      ]
+    },
+    "/v1/namespaces": {
+      "status": 404,
+      "headers": {
+        "content-type": "text/plain; charset=utf-8"
+      },
+      "body": "Invalid URL path: not a recognized HTTP API endpoint\n"
+    },
+    "/v1/status/leader": {
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "x-consul-default-acl-policy": "allow"
+      },
+      "body": "127.0.0.1:8300"
+    }
+  }
+}
